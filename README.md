@@ -3,19 +3,19 @@
 Simple C64 MS Basic emulator. You can run simple basic and machine code programs.
 
 Emulates:
-- PRG format files
+- 6502 documented ops
+- runs PRG files
 - keyboard matrix (not all keys)
 - CIA timers (jiffis)
-- VIC graphics and text modes with bad lines
-- 6510 processor, irqs, stack etc
+- VIC graphics and text modes (bad lines)
 - C64 memory layout & banking
 - Microsoft BASIC interpreter
 - Commodore Kernel ROM
 
 Runs at PAL speed.
 
-In the fuure
-- Sprites, scrolling, VIC interrupts
+In the future
+- Sprites, hardware scrolling, VIC interrupts
 - better CPU/memory emulation (write cycle)
 - simple SID
 - full CIA, TOD and serial emulation
