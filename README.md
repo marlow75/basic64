@@ -24,5 +24,5 @@ Have fun and feel free to grab and modify
 
 Alt+F10 - loads PRG file into memory
 
-Before running shoplifting-c.prg, first stealth game ever you must run pet4032.prg emulator. It will setup pet memory configuration.
+Before running shoplifting-c.prg, first stealth game ever, you must run pet4032.prg. It's simple Commodore PET4032 emulator.
 Credit for Robin, 8-bit Show and Tell for improved version of it.
