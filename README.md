@@ -2,7 +2,7 @@
 
 Simple C64 MS Basic emulator. You can run simple basic and machine code programs.
 
-Emulates:
+Features:
 - 6502 documented ops
 - runs PRG files
 - keyboard matrix (not all keys)
@@ -23,3 +23,6 @@ In the future
 Have fun and feel free to grab and modify
 
 Alt+F10 - loads PRG file into memory
+
+Before running shoplifting-c.prg, first stealth game ever you must run pet4032.prg emulator. It will setup pet memory configuration.
+Credit for Robin, 8-bit Show and Tell for improved version of it.
