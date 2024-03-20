@@ -59,8 +59,8 @@ public class VIC2 {
 			680, 720, 760, 800, 840, 880, 920, 960 };
 
 	// C64 default colors
-	private final static int colors[] = new int[] { 0, 0xFFFFFF, 0x68372B, 0x70A4B2, 0x6F3D86, 0x588D43, 0x352879, 0xB8C76F, 
-			0x6F4F25, 0x433900, 0x9A6759, 0x444444, 0x6C6C6C, 0x9AD284, 0x6C5EB5, 0x959595 };
+	private final static int colors[] = new int[] { 0, 0xffffff, 0x813338, 0x75cec8, 0x8e3c97, 0x56ac4d, 0x2e2c9b,
+			0xedf171, 0x8e5029, 0x553800, 0xc46c71, 0x4a4a4a, 0x7b7b7b, 0xa9ff9f, 0x706deb, 0xb2b2b2 };
 
 	public static final void initialize(final Canvas canvas) {
 		final GraphicsEnvironment env = GraphicsEnvironment.getLocalGraphicsEnvironment();
@@ -70,7 +70,7 @@ public class VIC2 {
 		final BufferedImage image = config.createCompatibleImage(w_width, w_height);
 		pixels = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
 
-		new ShowScreen(canvas, image).start();
+		new ScreenThread(canvas, image).start();
 	}
 
 	public static final void clock(final int cycles) {
@@ -464,13 +464,13 @@ public class VIC2 {
 	}
 }
 
-class ShowScreen extends Thread {
+class ScreenThread extends Thread {
 	private Canvas canvas;
 
 	private boolean running = true;
 	private BufferedImage image;
 
-	public ShowScreen(final Canvas canvas, final BufferedImage image) {
+	public ScreenThread(final Canvas canvas, final BufferedImage image) {
 		this.canvas = canvas;
 		this.image = image;
 	}
@@ -501,8 +501,8 @@ class ShowScreen extends Thread {
 			}
 		} catch (final InterruptedException e) {
 			running = false;
+		} finally {
+			gfx.dispose();	
 		}
-
-		gfx.dispose();
 	}
 }

@@ -1,5 +1,6 @@
 package pl.dido.c64.emulator;
 
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UnsupportedEncodingException;
@@ -179,8 +180,14 @@ public class Memory {
 	}
 
 	public static final void clear() {
-		for (int i = 0; i <= 0xffff; i++)
-			ram[i] = 0;
+		int pattern = 0xff;
+		for (int i = 0; i <= 0xffff; i++) {
+			 if (i % 64 == 0)
+				 pattern = ~pattern & 0xff;
+			 
+			 if (i < 0xd000 || i > 0xdfff) // skip io space
+				 ram[i] = pattern;
+		}
 	}
 
 	public static final void dump() throws UnsupportedEncodingException {
@@ -219,6 +226,18 @@ public class Memory {
 			
 			System.out.println();
 		}
+	}
+	
+	public static final void reset() {
+		clear();
+		
+		try {
+			loadKernal(new FileInputStream("kernal"));   // kernel
+			loadBasic(new FileInputStream("basic"));     // basic
+			loadChargen(new FileInputStream("chargen")); // chargen
+		} catch (final IOException e) {
+			System.out.println("Can't load one of rom file !!!");
+		} 
 	}
 
 	public static final boolean match(final int address, final int[] data) {

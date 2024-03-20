@@ -23,29 +23,23 @@ public class C64 {
 
 	private static double clock = 0.985 * 1e6; // 0.985 MHz PAL
 
-	protected static final int interval = (int) (1 / clock * 1e9); // interval between instructions in nanoseconds
+	protected static final int interval = (int) (1 / clock * 1e9); // interval between clock tick in nanoseconds
 	protected static long errors = 0; // total error
 
 	protected static long operations = 0; // total instruction counter
 	protected static long ticks = 0; // total clock ticks
+	
 	protected static long irqs = 0; // total interrupt count
 	protected static long delta;
+	
 	protected static boolean run = true;
 
 	private static final int width = 403;
 	private static final int height = 284;
 
 	private static final String title = "C64 Simple BASIC emulator";
-	// Creating the frame.
+	// creating the frame
 	protected static JFrame frame;
-
-	private static void initializeMachine() throws FileNotFoundException, IOException {
-		Memory.loadKernal(new FileInputStream("kernal"));   // kernel
-		Memory.loadBasic(new FileInputStream("basic"));     // basic
-		Memory.loadChargen(new FileInputStream("chargen")); // chargen
-
-		MOS6502.reset();
-	}
 
 	private static void initializeVideo() {
 		frame = new JFrame(title);
@@ -58,7 +52,7 @@ public class C64 {
 		frame.setResizable(false);
 		frame.setVisible(true);
 
-		// Creating the canvas.
+		// creating the canvas.
 		final Canvas canvas = new Canvas();
 
 		canvas.setSize(width * 2, height * 2);
@@ -66,16 +60,21 @@ public class C64 {
 		canvas.setVisible(true);
 		canvas.setFocusable(false);
 
-		// Putting it all together.
+		// putting it all together.
 		frame.add(canvas);
 		frame.pack();
 		canvas.createBufferStrategy(2);
 
 		VIC2.initialize(canvas);
 	}
+	
+	public static void reset() {
+		Memory.reset();
+		MOS6502.reset();
+	}
 
 	public static void main(final String args[]) throws InterruptedException, FileNotFoundException, IOException {
-		initializeMachine();
+		reset();
 		initializeVideo();
 
 		final long time = System.currentTimeMillis();
@@ -120,12 +119,12 @@ public class C64 {
 			for (int i = 2; i < len; i++)
 				Memory.store(j++, data[i] & 0xff);
 
-			if (start == 0x0801) { // assume that is basic program
+			//if (start == 0x0801) { // assume that is basic program
 				final int end = j & 0xffff;
 				if (end < 0x9fff) {
 					// IO
-					Memory.store(0xb, 76); // Current token during tokenization.
-					Memory.store(0xf, 2);  // Quotation mode
+					Memory.store( 0xb, 76); // Current token during tokenization.
+					Memory.store( 0xf, 2);  // Quotation mode
 					Memory.store(0x23, 8); // Temporary area
 
 					final int lo = end & 0xff;
@@ -154,7 +153,7 @@ public class C64 {
 										   // bus or datasette.
 					Memory.store(0xc4, 8);
 					Memory.store(0xb7, 0); // first parameter of LOAD, SAVE and VERIFY or fourth parameter of OPEN.
-				}
+				//}
 			}
 		} catch (IOException e) {
 			e.printStackTrace();
@@ -185,8 +184,11 @@ class KeyListener extends KeyAdapter {
 				C64.loadPRG(fc.getSelectedFile());
 
 			break;
-		case KeyEvent.VK_F12:
+		case KeyEvent.VK_F11:
 			C64.dump();
+			break;
+		case KeyEvent.VK_F12:
+			C64.reset();
 			break;
 		default:
 			CIA.keypressed(key, event.isShiftDown());
@@ -209,18 +211,19 @@ class WindowListener extends WindowAdapter {
 class Computer extends Thread {
 	// main Computer thread
 	public void run() {
-		long t1 = 0, t2 = 0, wt = 0, errors = 0, operations = 0;
-		int cycles, ticks = 0, delta = 0;
-		
 		final int interval = C64.interval;
-
+		
+		long t1 = 0, t2 = 0, wt = 0, errors = 0, operations = 0;
+		int cycles, ticks = 0, delta = 985 * interval;
+		
 		try {
 			// main loop
 			t1 = System.nanoTime();
 			while (C64.run) {
 				int count = 0;
-
-				while (count < 985) { // 1ms = 985 cycles for PAL
+				long elapsed = delta;
+				
+				while (elapsed > 0) { // 1ms = 985 cycles for PAL
 					if (!VIC2.bad_line) { // bad line stops (CPU, SID, CIA)
 						if ((CIA.IRQ || VIC2.IRQ) && MOS6502.I == 0) {
 							C64.irqs++;
@@ -233,12 +236,13 @@ class Computer extends Thread {
 					} else
 						cycles = 2;
 
-					VIC2.clock(cycles);					
+					VIC2.clock(cycles);	
 					count += cycles;
+					
+					elapsed -= cycles * interval;
 				}
 
 				ticks += count;
-				delta = count * interval;
 				
 				wt = t1 + delta; // how much time instruction took
 				t2 = System.nanoTime();
