@@ -2,11 +2,11 @@
 
 Simple C64 MS Basic emulator. You can run simple basic and machine code programs.
 
-Emulates:
+Features:
 - 6502 documented ops
 - runs PRG files
 - keyboard matrix (not all keys)
-- CIA timers (jiffis)
+- CIA timers (jiffies)
 - VIC graphics and text modes (bad lines)
 - C64 memory layout & banking
 - Microsoft BASIC interpreter
@@ -23,3 +23,11 @@ In the future
 Have fun and feel free to grab and modify
 
 Alt+F10 - loads PRG file into memory
+
+PRG examples files
+
+- pet4032 - simple Commodore PET4032 emulator in Basic.
+- shoplifting-c.prg - first stealth game ever written in Basic. Requires PET4032 emulator. Credit to Robin, 8-bit Show and Tell for improved version of it.
+- themil, snoopy_hires - hires picture, machine coded
+- 1 line game, 10print, fala - one liners, little effort, great effect
+- ...
