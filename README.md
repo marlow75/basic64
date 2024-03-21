@@ -22,12 +22,16 @@ In the future
 
 Have fun and feel free to grab and modify
 
-Alt+F10 - loads PRG file into memory
+# Keys
 
-PRG example files
+F10 - loads PRG file into memory at the headers address
+F11 - dumps all RAM memory
+F12 - reset
+
+# PRG example files
 
 - pet4032 - simple Commodore PET4032 emulator in Basic.
 - shoplifting-c.prg - first stealth game ever written in Basic. Requires PET4032 emulator. Credit to Robin, 8-bit Show and Tell for improved version of it.
 - themil, snoopy_hires - hires picture, machine coded
 - 1 line game, 10print, fala - one liners, little effort, great effect
-- nonmonochrome - interesting 6 bytes DEMO. Scanes all C64 memory, RAM gives monochrome stripes, ROM color ones. 
+- nonmonochrome - interesting 6 bytes DEMO. Scanes all C64 memory, RAM gives monochrome stripes, ROM color ones.
