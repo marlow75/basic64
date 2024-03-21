@@ -24,9 +24,9 @@ Have fun and feel free to grab and modify
 
 # Keys
 
-F10 - loads PRG file into memory at the headers address
-F11 - dumps all RAM memory
-F12 - reset
+- F10 - loads PRG file into memory at the headers address
+- F11 - dumps all RAM memory
+- F12 - machine cold reset
 
 # PRG example files
 
