@@ -185,9 +185,11 @@ public class Memory {
 			 if (i % 64 == 0)
 				 pattern = ~pattern & 0xff;
 			 
-			 if (i < 0xd000 || i > 0xdfff) // skip io space
-				 ram[i] = pattern;
+			 ram[i] = pattern;
 		}
+		
+		for (int i = 0; i <= 0xfff; i++)
+			ports[i] = 0;
 	}
 
 	public static final void dump() throws UnsupportedEncodingException {

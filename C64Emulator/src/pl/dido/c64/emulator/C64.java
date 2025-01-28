@@ -28,14 +28,14 @@ public class C64 {
 
 	protected static long operations = 0; // total instruction counter
 	protected static long ticks = 0; // total clock ticks
-	
+
 	protected static long irqs = 0; // total interrupt count
 	protected static long delta;
-	
+
 	protected static boolean run = true;
 
-	private static final int width = 403;
-	private static final int height = 284;
+	private static final int width = 720;
+	private static final int height = 576;
 
 	private static final String title = "C64 Simple BASIC emulator";
 	// creating the frame
@@ -43,7 +43,7 @@ public class C64 {
 
 	private static void initializeVideo() {
 		frame = new JFrame(title);
-		frame.setSize(width * 2, height * 2);
+		frame.setSize(width, height);
 		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
 		frame.setLocationRelativeTo(null);
 		frame.addKeyListener(new KeyListener());
@@ -55,7 +55,7 @@ public class C64 {
 		// creating the canvas.
 		final Canvas canvas = new Canvas();
 
-		canvas.setSize(width * 2, height * 2);
+		canvas.setSize(width, height);
 		canvas.setBackground(Color.BLACK);
 		canvas.setVisible(true);
 		canvas.setFocusable(false);
@@ -67,14 +67,9 @@ public class C64 {
 
 		VIC2.initialize(canvas);
 	}
-	
-	public static void reset() {
-		Memory.reset();
-		MOS6502.reset();
-	}
 
 	public static void main(final String args[]) throws InterruptedException, FileNotFoundException, IOException {
-		reset();
+		Computer.reset();
 		initializeVideo();
 
 		final long time = System.currentTimeMillis();
@@ -119,41 +114,39 @@ public class C64 {
 			for (int i = 2; i < len; i++)
 				Memory.store(j++, data[i] & 0xff);
 
-			//if (start == 0x0801) { // assume that is basic program
-				final int end = j & 0xffff;
-				if (end < 0x9fff) {
-					// IO
-					Memory.store( 0xb, 76); // Current token during tokenization.
-					Memory.store( 0xf, 2);  // Quotation mode
-					Memory.store(0x23, 8); // Temporary area
+			final int end = j & 0xffff;
+			if (end < 0x9fff) {
+				// IO
+				Memory.store(0xb, 76); // Current token during tokenization.
+				Memory.store(0xf, 2); // Quotation mode
+				Memory.store(0x23, 8); // Temporary area
 
-					final int lo = end & 0xff;
-					final int hi = end >> 8;
+				final int lo = end & 0xff;
+				final int hi = end >> 8;
 
-					Memory.store(0x2d, lo); // Pointer to beginning of variable area. (End of program plus 1.)
-					Memory.store(0x2e, hi);
+				Memory.store(0x2d, lo); // Pointer to beginning of variable area. (End of program plus 1.)
+				Memory.store(0x2e, hi);
 
-					Memory.store(0x2f, lo); // Pointer to beginning of array variable area.
-					Memory.store(0x30, hi);
+				Memory.store(0x2f, lo); // Pointer to beginning of array variable area.
+				Memory.store(0x30, hi);
 
-					Memory.store(0x31, lo); // Pointer to end of array variable area.
-					Memory.store(0x32, hi);
+				Memory.store(0x31, lo); // Pointer to end of array variable area.
+				Memory.store(0x32, hi);
 
-					Memory.store(0x49, 1); // Device number of LOAD, SAVE and VERIFY.
+				Memory.store(0x49, 1); // Device number of LOAD, SAVE and VERIFY.
 
-					Memory.store(0x90, 64); // Serial bus output cache status
-					Memory.store(0x94, 64);
-					Memory.store(0xa3, 64); // EOI switch during serial bus output.
+				Memory.store(0x90, 64); // Serial bus output cache status
+				Memory.store(0x94, 64);
+				Memory.store(0xa3, 64); // EOI switch during serial bus output.
 
-					Memory.store(0xb8, 1);  // Logical number of current file.
-					Memory.store(0xb9, 96); // Secondary address of current file.
-					Memory.store(0xba, 1);  // Device number of current file.
+				Memory.store(0xb8, 1); // Logical number of current file.
+				Memory.store(0xb9, 96); // Secondary address of current file.
+				Memory.store(0xba, 1); // Device number of current file.
 
-					Memory.store(0xc3, 1); // Start address for a secondary address of 0 for LOAD and VERIFY from serial
-										   // bus or datasette.
-					Memory.store(0xc4, 8);
-					Memory.store(0xb7, 0); // first parameter of LOAD, SAVE and VERIFY or fourth parameter of OPEN.
-				//}
+				Memory.store(0xc3, 1); // Start address for a secondary address of 0 for LOAD and VERIFY from serial
+										// bus or datasette.
+				Memory.store(0xc4, 8);
+				Memory.store(0xb7, 0); // first parameter of LOAD, SAVE and VERIFY or fourth parameter of OPEN.
 			}
 		} catch (IOException e) {
 			e.printStackTrace();
@@ -188,7 +181,7 @@ class KeyListener extends KeyAdapter {
 			C64.dump();
 			break;
 		case KeyEvent.VK_F12:
-			C64.reset();
+			Computer.reset();
 			break;
 		default:
 			CIA.keypressed(key, event.isShiftDown());
@@ -209,57 +202,75 @@ class WindowListener extends WindowAdapter {
 }
 
 class Computer extends Thread {
-	// main Computer thread
+	private static boolean halt = true;
+
+	public static void reset() {
+		halt = true;
+
+		Memory.reset();
+		CIA.reset();
+		VIC2.reset();
+		MOS6502.reset();
+
+		halt = false;
+	}
+
+	// main computer thread
 	public void run() {
 		final int interval = C64.interval;
-		
+
 		long t1 = 0, t2 = 0, wt = 0, errors = 0, operations = 0;
-		int cycles, ticks = 0, delta = 985 * interval;
-		
+		int cycles, ticks = 0, delta = 985 * interval; // 1ms = 985 cycles for PAL
+
 		try {
 			// main loop
 			t1 = System.nanoTime();
 			while (C64.run) {
-				int count = 0;
-				long elapsed = delta;
-				
-				while (elapsed > 0) { // 1ms = 985 cycles for PAL
-					if (!VIC2.bad_line) { // bad line stops (CPU, SID, CIA)
-						if ((CIA.IRQ || VIC2.IRQ) && MOS6502.I == 0) {
-							C64.irqs++;
-							cycles = MOS6502.IRQ();
+				if (!halt) {
+					int count = 0;
+					long elapsed = delta;
+
+					while (!halt && elapsed > 0) { 
+						if (!VIC2.bad_line) { // bad line stops (CPU, SID, CIA)
+							if ((CIA.IRQ || VIC2.IRQ) && MOS6502.I == 0) {
+								C64.irqs++;
+								cycles = MOS6502.IRQ();
+							} else
+								cycles = MOS6502.executeNext();
+
+							CIA.clock(cycles);
+							operations++;
 						} else
-							cycles = MOS6502.executeNext();
+							cycles = 2;
 
-						CIA.clock(cycles);
-						operations++;
-					} else
-						cycles = 2;
+						VIC2.clock(cycles);
+						count += cycles;
 
-					VIC2.clock(cycles);	
-					count += cycles;
-					
-					elapsed -= cycles * interval;
-				}
+						elapsed -= cycles * interval;
+					}
 
-				ticks += count;
-				
-				wt = t1 + delta; // how much time instruction took
-				t2 = System.nanoTime();
+					ticks += count;
 
-				if (wt > t2)
-					Thread.sleep(0, (int) (wt - t2));
-				else
-					errors++;
+					wt = t1 + delta - elapsed; 
+					t2 = System.nanoTime();
 
-				t1 = t2;
+					if (wt > t2) {
+						Thread.sleep(0, (int) (wt - t2));
+						errors--;
+					}
+					else
+						errors++;
+
+					t1 = t2;
+				} else 
+					Thread.sleep(1000);
 			}
 		} catch (final InterruptedException ex) {
 			// do nothing
 		} finally {
 			C64.delta = delta;
 			C64.ticks = ticks;
-			
+
 			C64.errors = errors;
 			C64.operations = operations;
 		}

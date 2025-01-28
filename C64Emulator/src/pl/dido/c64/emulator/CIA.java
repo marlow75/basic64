@@ -6,12 +6,11 @@ public class CIA {
 	private static int column, column2, row, row2;
 	
 	// counterA
-	private static int counterA = 0xffff, latchA = 0x00;
-	private static boolean runA = false;
+	private static int counterA, latchA;
+	private static boolean runA;
 	
-	public static boolean IRQ = false;
+	public static boolean IRQ;
 
-	// TODO reset
 	public static final void counterA(final int cycles) {
 		final int CTA = Memory.ports[0xc0e]; // CTA
 		
@@ -427,5 +426,15 @@ public class CIA {
 
 		column2 = 0;
 		row2 = 0;
+	}
+
+	public static void reset() {
+		column = 0; column2 = 0; row = 0; row2 = 0;
+		
+		// counterA
+		counterA = 0xffff; latchA = 0x00;
+		runA = false;
+		
+		IRQ = false;
 	}
 }

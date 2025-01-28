@@ -5,12 +5,13 @@ Simple C64 MS Basic emulator. You can run simple basic and machine code programs
 Features:
 - 6502 documented ops
 - runs PRG files
-- keyboard matrix (not all keys)
+- emulated keyboard matrix (not all keys)
 - CIA timers (jiffies)
 - VIC graphics and text modes (bad lines)
 - C64 memory layout & banking
 - Microsoft BASIC interpreter
 - Commodore Kernel ROM
+- Simple PAL emulation (S-Video quality)
 
 Runs at PAL speed.
 
