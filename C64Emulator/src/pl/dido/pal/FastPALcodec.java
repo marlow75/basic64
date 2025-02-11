@@ -106,7 +106,7 @@ public class FastPALcodec {
 				final float g;
 				final float b;
 
-				if (p < len - 3) {
+				if (p < len) {
 					r = ((d >> 16) & 0xff) / 255f;
 					g = ((d >> 8) & 0xff) / 255f;
 					b = (d & 0xff) / 255f;
@@ -141,7 +141,7 @@ public class FastPALcodec {
 				final float g;
 				final float b;
 
-				if (p < len - 3) {
+				if (p < len) {
 					r = ((d >> 16) & 0xff) / 255f;
 					g = ((d >> 8) & 0xff) / 255f;
 					b = (d & 0xff) / 255f;
