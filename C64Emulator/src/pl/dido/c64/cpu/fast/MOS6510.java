@@ -19,17 +19,17 @@ public class MOS6510 {
 
 	// increment program counter
 	private static final void incPC() {
-		PC = ++PC & 0xffff;
+		PC = (PC + 1) & 0xffff;
 	}
 
 	// increment stack pointer
 	private static final void incSP() {
-		SP = ++SP & 0xff;
+		SP = (SP + 1) & 0xff;
 	}
 
 	// decrement stack pointer
 	private static final void decSP() {
-		SP = --SP & 0xff;
+		SP = (SP - 1) & 0xff;
 	}
 
 	// make word from lo and hi bytes
@@ -105,7 +105,6 @@ public class MOS6510 {
 		hi = Memory.fetch(0xFFFF);
 
 		PC = word(lo, hi);
-
 		return 7;
 	}
 
@@ -168,8 +167,7 @@ public class MOS6510 {
 		return ALU;
 	}
 
-	protected static final int executeBranch() {
-		final byte rel = (byte) Memory.fetch(PC - 1);
+	protected static final int executeBranch(final int rel) {
 		final int oPC = PC;
 
 		PC = (PC + rel) & 0xffff;
@@ -190,7 +188,7 @@ public class MOS6510 {
 
 			return 1;
 		case 0b010: // accumulator
-			Operand.type = Operand.TYPE.REG_AC;
+			Operand.assignACC();
 
 			return 0;
 		case 0b011: // absolute
@@ -501,26 +499,28 @@ public class MOS6510 {
 
 		// is it a branch instruction? xxy10000
 		if ((opcode & 0b00011111) == 0b10000) {
+			final int rel = Memory.fetch(PC);
+			
 			incPC();
 			final int wait = 2;
 
 			switch (opcode & 0b11100000) {
 			case 0b00100000: // BMI
-				return (N == 128) ? wait + executeBranch() : wait;
+				return (N == 128) ? wait + executeBranch(rel) : wait;
 			case 0b00000000: // BPL
-				return (N == 0) ? wait + executeBranch() : wait;
+				return (N == 0) ? wait + executeBranch(rel) : wait;
 			case 0b01100000: // BVS
-				return (V == 64) ? wait + executeBranch() : wait;
+				return (V == 64) ? wait + executeBranch(rel) : wait;
 			case 0b01000000: // BVC
-				return (V == 0) ? wait + executeBranch() : wait;
+				return (V == 0) ? wait + executeBranch(rel) : wait;
 			case 0b10000000: // BCC
-				return (C == 0) ? wait + executeBranch() : wait;
+				return (C == 0) ? wait + executeBranch(rel) : wait;
 			case 0b10100000: // BCS
-				return (C == 1) ? wait + executeBranch() : wait;
+				return (C == 1) ? wait + executeBranch(rel) : wait;
 			case 0b11000000: // BNE
-				return (Z == 0) ? wait + executeBranch() : wait;
+				return (Z == 0) ? wait + executeBranch(rel) : wait;
 			case 0b11100000: // BEQ
-				return (Z == 2) ? wait + executeBranch() : wait;
+				return (Z == 2) ? wait + executeBranch(rel) : wait;
 			default:
 				return wait;
 			}

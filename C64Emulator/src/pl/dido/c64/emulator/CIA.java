@@ -4,51 +4,60 @@ public class CIA {
 
 	// keyboard pins
 	private static int column, column2, row, row2;
-	
+
 	// counterA
 	private static int counterA, latchA;
 	private static boolean runA;
-	
+
 	public static boolean IRQ;
 
 	public static final void counterA(final int cycles) {
-		final int CTA = Memory.ports[0xc0e]; // CTA
-		
+		final int CTA = Memory.ports[0xc0e]; // CTA 
+	
 		final int TAlo = Memory.ports[0xc04];
 		final int TAhi = Memory.ports[0xc05];
 		
 		// run counter if enable bit is set or there was writing to hi byte latch
 		final boolean continuous = (CTA & 0x8) == 0;
-		runA = (CTA & 0b1) == 0b1 || runA && !continuous;		
-		
+		runA = (CTA & 0b1) == 0b1 || runA && !continuous;
+
+		final int reload = (TAlo | TAhi << 8);
 		if (latchA != TAhi)
+
 			if (!continuous) {
 				runA = true;
-				
+
 				latchA = TAhi;
-				counterA = TAlo | TAhi << 8;
-				
+				counterA = reload;
+
 				return;
 			}
-		
+
 		if (runA) {
 			final int delta = counterA - cycles; // only processor ticks
-			if (continuous)  { // continuous mode?
-				counterA = delta > 0 ?  delta : (TAlo | TAhi << 8) - delta;
-				IRQ = delta < 0;
-			} else  // single shot
-				if (delta > 0)
-					counterA = delta;
-				else {
-					counterA = (TAlo | TAhi << 8) - delta;
-					runA = false;
-				}
-
-			Memory.ram[0xdc04] = counterA & 0xff;
-			Memory.ram[0xdc05] = counterA >> 8;
+			if (delta < 0) {
+				Memory.ram[0xdc0d] |= 129; // timer A interrupt
+				IRQ = true;
+			}
+			
+			 // continuous mode?
+			if (continuous)
+				counterA = delta < 0 ? reload + delta : delta;
+			 else 
+			// single shot
+			if (delta < 0)
+				counterA = reload + delta;
+			else {
+				counterA = delta;
+				runA = false;
+			}
 		}
+		
+		Memory.ram[0xdc04] = counterA & 0xff;
+		Memory.ram[0xdc05] = counterA >> 8;
 	}
-	
+		
+	// uproszczony obraz odczytu portu - pod klawiature
 	public static final void keyboard() {
 		final int portA = Memory.ports[0xc00];
 
@@ -62,6 +71,13 @@ public class CIA {
 			Memory.ram[0xdc01] = 0xff;
 	}
 	
+	public static final void readACK(final int address) {
+		if (address == 0xdc0d) {
+			Memory.ram[0xdc0d] = 0;
+			IRQ = false;
+		}
+	}
+
 	public static final void clock(final int cycles) {
 		keyboard();
 		counterA(cycles);
@@ -72,7 +88,7 @@ public class CIA {
 		final int config = Memory.ports[0xd00];
 		if (Memory.ram[0xdd00] != config) {
 			Memory.ram[0xdd00] = config; // shadow register
-		
+
 			VIC2.offset = ((config & 0b11) ^ 0b11) * 16 * 1024;
 		}
 	}
@@ -135,7 +151,7 @@ public class CIA {
 			if (shift) {
 				row2 = 0x7f;
 				column2 = 0xfd;
-			}			
+			}
 			break;
 		// 37 -- Left
 		case 37:
@@ -421,20 +437,25 @@ public class CIA {
 	}
 
 	public static final void keyReleased() {
-		column = 255;
-		row = 0;
-
-		column2 = 0;
-		row2 = 0;
+		column = 0xff;
+		row = 0xff;
+		
+		column2 = 0xff;
+		row2 = 0xff;
 	}
 
 	public static void reset() {
-		column = 0; column2 = 0; row = 0; row2 = 0;
+		column = 0xff;
+		column2 = 0xff;
+		
+		row = 0xff;
+		row2 = 0xff;
 		
 		// counterA
-		counterA = 0xffff; latchA = 0x00;
+		counterA = 0xffff;
+		latchA = 0;
+
 		runA = false;
-		
 		IRQ = false;
 	}
 }

@@ -12,33 +12,40 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 
+import javax.sound.sampled.LineUnavailableException;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.filechooser.FileFilter;
 import javax.swing.filechooser.FileNameExtensionFilter;
 
 import pl.dido.c64.cpu.MOS6502;
+import pl.dido.c64.sound.SoundDriver;
 
 public class C64 {
 
-	private static double clock = 0.985 * 1e6; // 0.985 MHz PAL
+	// 0.985 MHz PAL
+	public static final double CLOCK_HZ = 0.985248 * 1e6;
 
-	protected static final int interval = (int) (1 / clock * 1e9); // interval between clock tick in nanoseconds
-	protected static long errors = 0; // total error
+	// dok³adny czas jednego cyklu CPU
+	protected static final long NS_PER_CYCLE = 1015;
 
-	protected static long operations = 0; // total instruction counter
-	protected static long ticks = 0; // total clock ticks
+	// sta³y kwant czasu pêtli 1/50 pal
+	protected static final long DELTA = 9_852;
 
-	protected static long irqs = 0; // total interrupt count
+	// statystyki
+	protected static long errors = 0;
+	protected static long operations = 0;
+
+	protected static long ticks = 0;
+	protected static long irqs = 0;
+
 	protected static long delta;
-
 	protected static boolean run = true;
 
 	private static final int width = 720;
 	private static final int height = 576;
 
-	private static final String title = "C64 Simple BASIC emulator";
-	// creating the frame
+	private static final String title = "C64 Simple emulator";
 	protected static JFrame frame;
 
 	private static void initializeVideo() {
@@ -52,15 +59,12 @@ public class C64 {
 		frame.setResizable(false);
 		frame.setVisible(true);
 
-		// creating the canvas.
 		final Canvas canvas = new Canvas();
-
 		canvas.setSize(width, height);
 		canvas.setBackground(Color.BLACK);
 		canvas.setVisible(true);
 		canvas.setFocusable(false);
 
-		// putting it all together.
 		frame.add(canvas);
 		frame.pack();
 		canvas.createBufferStrategy(2);
@@ -68,10 +72,11 @@ public class C64 {
 		VIC2.initialize(canvas);
 	}
 
-	public static void main(final String args[]) throws InterruptedException, FileNotFoundException, IOException {
+	public static void main(final String args[])
+			throws InterruptedException, FileNotFoundException, IOException, LineUnavailableException {
 		Computer.reset();
-		initializeVideo();
 
+		initializeVideo();
 		final long time = System.currentTimeMillis();
 
 		new Computer().start();
@@ -82,7 +87,7 @@ public class C64 {
 
 		System.out.println("C64 was running: " + elapsed + " ms");
 		System.out.println("Machine cycles: " + ticks + " ticks");
-		System.out.println("CPU operations: " + operations / elapsed * 1000 + " op/sec");
+		System.out.println("CPU operations: " + (elapsed > 0 ? operations / elapsed * 1000 : 0) + " op/sec");
 		System.out.println("Interrupt events: " + irqs);
 		System.out.println("Last loop time: " + delta + " nanos");
 		System.out.println(errors + " ERR");
@@ -116,45 +121,45 @@ public class C64 {
 
 			final int end = j & 0xffff;
 			if (end < 0x9fff) {
-				// IO
-				Memory.store(0xb, 76); // Current token during tokenization.
-				Memory.store(0xf, 2); // Quotation mode
-				Memory.store(0x23, 8); // Temporary area
+				Memory.store(0xb, 76);
+				Memory.store(0xf, 2);
+				Memory.store(0x23, 8);
 
 				final int lo = end & 0xff;
 				final int hi = end >> 8;
 
-				Memory.store(0x2d, lo); // Pointer to beginning of variable area. (End of program plus 1.)
+				Memory.store(0x2d, lo);
 				Memory.store(0x2e, hi);
 
-				Memory.store(0x2f, lo); // Pointer to beginning of array variable area.
+				Memory.store(0x2f, lo);
 				Memory.store(0x30, hi);
 
-				Memory.store(0x31, lo); // Pointer to end of array variable area.
+				Memory.store(0x31, lo);
 				Memory.store(0x32, hi);
 
-				Memory.store(0x49, 1); // Device number of LOAD, SAVE and VERIFY.
+				Memory.store(0x49, 1);
 
-				Memory.store(0x90, 64); // Serial bus output cache status
+				Memory.store(0x90, 64);
 				Memory.store(0x94, 64);
-				Memory.store(0xa3, 64); // EOI switch during serial bus output.
+				Memory.store(0xa3, 64);
 
-				Memory.store(0xb8, 1); // Logical number of current file.
-				Memory.store(0xb9, 96); // Secondary address of current file.
-				Memory.store(0xba, 1); // Device number of current file.
+				Memory.store(0xb8, 1);
+				Memory.store(0xb9, 96);
+				Memory.store(0xba, 1);
 
-				Memory.store(0xc3, 1); // Start address for a secondary address of 0 for LOAD and VERIFY from serial
-										// bus or datasette.
+				Memory.store(0xc3, 1);
 				Memory.store(0xc4, 8);
-				Memory.store(0xb7, 0); // first parameter of LOAD, SAVE and VERIFY or fourth parameter of OPEN.
+				Memory.store(0xb7, 0);
 			}
+
 		} catch (IOException e) {
 			e.printStackTrace();
 		} finally {
 			try {
-				is.close();
+				if (is != null)
+					is.close();
 			} catch (IOException e) {
-				// TODO Auto-generated catch block
+				// ignore
 			}
 		}
 	}
@@ -172,17 +177,18 @@ class KeyListener extends KeyAdapter {
 			fc.setFileFilter(filter);
 
 			final int returnVal = fc.showOpenDialog(C64.frame);
-
 			if (returnVal == JFileChooser.APPROVE_OPTION)
 				C64.loadPRG(fc.getSelectedFile());
-
 			break;
+
 		case KeyEvent.VK_F11:
 			C64.dump();
 			break;
+
 		case KeyEvent.VK_F12:
 			Computer.reset();
 			break;
+
 		default:
 			CIA.keypressed(key, event.isShiftDown());
 		}
@@ -204,75 +210,98 @@ class WindowListener extends WindowAdapter {
 class Computer extends Thread {
 	private static boolean halt = true;
 
+	// precyzyjne doci¹ganie po sleep
+	private static final long SPIN_GUARD_NS = 200_000L; // 200 us
+
 	public static void reset() {
 		halt = true;
 
-		Memory.reset();
-		CIA.reset();
 		VIC2.reset();
-		MOS6502.reset();
+		Memory.reset();
 
+		CIA.reset();
+		SID.reset();
+
+		MOS6502.reset();
 		halt = false;
 	}
 
-	// main computer thread
+	@Override
 	public void run() {
-		final int interval = C64.interval;
 
-		long t1 = 0, t2 = 0, wt = 0, errors = 0, operations = 0;
-		int cycles, ticks = 0, delta = 985 * interval; // 1ms = 985 cycles for PAL
+		final SoundDriver driver = new SoundDriver();
+		final Thread audioThread = new Thread(driver, "AudioDriver");
+
+		audioThread.setDaemon(true);
+		audioThread.start();
+
+		long t1;
+		long t2;
 
 		try {
-			// main loop
 			t1 = System.nanoTime();
+
 			while (C64.run) {
 				if (!halt) {
-					int count = 0;
-					long elapsed = delta;
+					long countCycles = 0;
 
-					while (!halt && elapsed > 0) { 
-						if (!VIC2.bad_line) { // bad line stops (CPU, SID, CIA)
-							if ((CIA.IRQ || VIC2.IRQ) && MOS6502.I == 0) {
+					while (countCycles < C64.DELTA) {
+						final int cycles;
+
+						//if (!VIC2.bad_line) {
+							if (MOS6502.I == 0 && (CIA.IRQ || VIC2.IRQ)) {
 								C64.irqs++;
 								cycles = MOS6502.IRQ();
 							} else
 								cycles = MOS6502.executeNext();
+							
+							C64.operations++;
+						//} else
+							//cycles = 1;
 
-							CIA.clock(cycles);
-							operations++;
-						} else
-							cycles = 2;
-
+						CIA.clock(cycles);
+						SID.clock(cycles);
 						VIC2.clock(cycles);
-						count += cycles;
 
-						elapsed -= cycles * interval;
+						countCycles += cycles;
 					}
 
-					ticks += count;
+					C64.ticks += countCycles;
 
-					wt = t1 + delta - elapsed; 
-					t2 = System.nanoTime();
+					final long target = t1 + countCycles * C64.NS_PER_CYCLE; // ile symulowanego czasu up³yne³o
+					t2 = System.nanoTime(); // ile up³yne³o naprawdê
 
-					if (wt > t2) {
-						Thread.sleep(0, (int) (wt - t2));
-						errors--;
-					}
-					else
-						errors++;
+					if (target > t2) {
+						// jesteœmy zbyt szybko
+						final long q = target - t2;
 
-					t1 = t2;
-				} else 
+						// sleep wiêksza czêœæ
+						if (q > SPIN_GUARD_NS + 10 * C64.NS_PER_CYCLE) {
+							final long sleepNs = q - SPIN_GUARD_NS;
+							final long ms = sleepNs / 1_000_000L;
+							
+							final int ns = (int) (sleepNs - ms * 1_000_000L);
+							Thread.sleep(ms, ns);
+						}
+
+						// krótki spin do target
+						while ((t2 = System.nanoTime()) < target)
+							Thread.onSpinWait();
+
+					} else
+						// zabrak³o czasu
+						C64.errors++;
+
+					C64.delta = t2 - t1;
+					t1 = target;
+				} else {
 					Thread.sleep(1000);
+					t1 = System.nanoTime();
+				}
 			}
-		} catch (final InterruptedException ex) {
-			// do nothing
-		} finally {
-			C64.delta = delta;
-			C64.ticks = ticks;
 
-			C64.errors = errors;
-			C64.operations = operations;
+		} catch (final InterruptedException ex) {
+			// ignore
 		}
 	}
 }

@@ -13,9 +13,13 @@ import pl.dido.pal.FastPALcodec;
 
 public class VIC2 {
 
-	enum MODE {
+	public enum MODE {
 		STANDARD_CHAR_MODE, MULTICOLOR_CHAR_MODE, STANDARD_BITMAP_MODE, MULTICOLOR_BITMAP_MODE, EXTENDED_COLOR_MODE
 	};
+
+	// --- IRQ bits (D019/D01A)
+	private static final int IRQ_RASTER = 0x01; // bit0
+	private static final int IRQ_LINE = 0x80;   // bit7 w D019 (status/pending)
 
 	public static boolean IRQ;
 
@@ -40,9 +44,10 @@ public class VIC2 {
 
 	// screen pixels
 	private static int pixels[];
-
 	public static boolean bad_line; // bad line marker
+
 	public static int offset; // VIC bank
+	private static int vicCycle;
 
 	private static int oy, om, och, ocode;
 	private static int code, pen;
@@ -54,8 +59,8 @@ public class VIC2 {
 	// hires
 	private static int bc = 0;
 	private static final int colorTable[] = new int[4];
-	
-	private static Thread screen; 
+
+	private static Thread screen;
 
 	// screen pointers
 	private static int code_ptr[] = { 0, 40, 80, 120, 160, 200, 240, 280, 320, 360, 400, 440, 480, 520, 560, 600, 640,
@@ -65,62 +70,279 @@ public class VIC2 {
 	private final static int colors[] = new int[] { 0, 0xffffff, 0x813338, 0x75cec8, 0x8e3c97, 0x56ac4d, 0x2e2c9b,
 			0xedf171, 0x8e5029, 0x553800, 0xc46c71, 0x4a4a4a, 0x7b7b7b, 0xa9ff9f, 0x706deb, 0xb2b2b2 };
 
+	// =========================
+	// SPRITES (VIC->raster mapping)
+	// =========================
+
+	// Obszar centrum (tak jak u Ciebie)
+	private static final int CENTER_X1 = 90;
+	private static final int CENTER_X2 = 409;
+	private static final int CENTER_Y1 = 56;
+	private static final int CENTER_Y2 = 255;
+
+	// --- BADLINE timing helpers ---
+	private static final int VIC_CYCLES_PER_LINE = 63; // PAL
+	private static final int BADLINE_CYCLE_START = 15; // inclusive
+	private static final int BADLINE_CYCLE_END = 54;   // inclusive (40 cykli)
+
+	private static final int BADLINE_Y_MIN = CENTER_Y1;
+	private static final int BADLINE_Y_MAX = CENTER_Y2;
+
+	/**
+	 * Mapowanie VIC sprite coords -> Twoje współrzędne rastra.
+	 */
+	private static final int VIC_SPR_X0_RASTER = 66;
+	private static final int VIC_SPR_Y0_RASTER = 6;
+
+	// --- Sprite regs (ports[] index == $D000..)
+	private static final int SPR_XY = 0x00; // D000..D00F
+	private static final int SPR_XMSB = 0x10; // D010
+	private static final int SPR_EN = 0x15; // D015
+	private static final int SPR_YEXP = 0x17; // D017
+	private static final int SPR_PRIO = 0x1B; // D01B
+	private static final int SPR_MCEN = 0x1C; // D01C
+	private static final int SPR_XEXP = 0x1D; // D01D
+
+	private static final int SPR_MC1 = 0x25; // D025
+	private static final int SPR_MC2 = 0x26; // D026
+	private static final int SPR_COL0 = 0x27; // D027..D02E
+
+	private static final int SPR_PTR_BASE = 0x03F8; // screen + 3F8..3FF
+	private static final int SPR_W = 24;
+	private static final int SPR_H = 21;
+
+	// Per-line sprite cache
+	private static int cachedLine = -1;
+	private static int lineSpriteCount = 0;
+
+	private static final int[] lsMask = new int[8];
+	private static final int[] lsSXr = new int[8];
+	private static final boolean[] lsEX = new boolean[8];
+	private static final boolean[] lsMC = new boolean[8];
+	private static final boolean[] lsPR = new boolean[8];
+
+	private static final int[] lsCol = new int[8];
+	private static final int[] lsB0 = new int[8];
+	private static final int[] lsB1 = new int[8];
+	private static final int[] lsB2 = new int[8];
+
+	private static int lsMC1, lsMC2;
+	private static int spriteHitMask;
+
+	private static boolean isBadlineRaster(final int rasterLine) {
+		final int d011 = Memory.ports[0x11] & 0xFF;
+		final boolean den = (d011 & 0x10) != 0; // DEN
+		
+		final int yscroll = d011 & 0x07;
+		final boolean inWindow = (rasterLine >= BADLINE_Y_MIN && rasterLine <= BADLINE_Y_MAX);
+		
+		return den && inWindow && ((rasterLine & 0x07) == yscroll);
+	}
+
+	private static final boolean isBgTransparent(final int bgRgb) {
+		final int globalBg = colors[Memory.ports[0x21] & 0x0F]; // $D021
+		
+		return bgRgb == globalBg;
+	}
+
+	private static void buildSpriteLineCache(final int currentLine) {
+		if (cachedLine == currentLine)
+			return;
+
+		cachedLine = currentLine;
+		lineSpriteCount = 0;
+
+		final int en = Memory.ports[SPR_EN] & 0xFF;
+		if (en == 0)
+			return;
+
+		final int xmsb = Memory.ports[SPR_XMSB] & 0xFF;
+		final int xexp = Memory.ports[SPR_XEXP] & 0xFF;
+		
+		final int yexp = Memory.ports[SPR_YEXP] & 0xFF;
+		final int mcen = Memory.ports[SPR_MCEN] & 0xFF;
+		final int prio = Memory.ports[SPR_PRIO] & 0xFF;
+
+		lsMC1 = colors[Memory.ports[SPR_MC1] & 0x0F];
+		lsMC2 = colors[Memory.ports[SPR_MC2] & 0x0F];
+
+		for (int i = 7; i >= 0; i--) {
+			final int mask = 1 << i;
+			
+			if ((en & mask) == 0)
+				continue;
+
+			int sx = Memory.ports[SPR_XY + i * 2] & 0xFF;
+			final int sy = Memory.ports[SPR_XY + i * 2 + 1] & 0xFF;
+			
+			if ((xmsb & mask) != 0)
+				sx |= 0x100;
+
+			final int sxRaster = sx + VIC_SPR_X0_RASTER;
+			final int syRaster = sy + VIC_SPR_Y0_RASTER;
+
+			final boolean ey = (yexp & mask) != 0;
+			int ly = currentLine - syRaster;
+			if (ey)
+				ly >>= 1;
+
+			if (ly < 0 || ly >= SPR_H)
+				continue;
+
+			final int ptr = Memory.fetchVIC2(screen_address + SPR_PTR_BASE + i) & 0xFF;
+			final int spriteBase = offset + (ptr << 6);
+			final int rowAddr = spriteBase + ly * 3;
+
+			final int idx = lineSpriteCount++;
+			lsMask[idx] = mask;
+			lsSXr[idx] = sxRaster;
+			
+			lsEX[idx] = (xexp & mask) != 0;
+			lsMC[idx] = (mcen & mask) != 0;
+			lsPR[idx] = (prio & mask) != 0;
+
+			lsCol[idx] = colors[Memory.ports[SPR_COL0 + i] & 0x0F];
+			lsB0[idx] = Memory.fetchVIC2(rowAddr) & 0xFF;
+			
+			lsB1[idx] = Memory.fetchVIC2(rowAddr + 1) & 0xFF;
+			lsB2[idx] = Memory.fetchVIC2(rowAddr + 2) & 0xFF;
+
+			if (lineSpriteCount == 8)
+				break;
+		}
+	}
+
+	private static int spriteOverlayFast(final int column, final int currentLine, final int bgRgb) {
+		if (lineSpriteCount == 0)
+			return -1;
+
+		spriteHitMask = 0;
+
+		for (int n = 0; n < lineSpriteCount; n++) {
+			if (lsPR[n] && !isBgTransparent(bgRgb))
+				continue;
+
+			int lx = column - lsSXr[n];
+			if (lsEX[n])
+				lx >>= 1;
+
+			if (lx < 0 || lx >= SPR_W)
+				continue;
+
+			final int mask = lsMask[n];
+
+			if (!lsMC[n]) {
+				final int byteVal = (lx < 8) ? lsB0[n] : (lx < 16) ? lsB1[n] : lsB2[n];
+				final int bitMask = 1 << (7 - (lx & 7));
+				
+				if ((byteVal & bitMask) == 0)
+					continue;
+
+				if (spriteHitMask != 0)
+					Memory.ram[0xD01E] |= (spriteHitMask | mask);
+				
+				spriteHitMask |= mask;
+
+				if (!isBgTransparent(bgRgb))
+					Memory.ram[0xD01F] |= mask;
+
+				return lsCol[n];
+			} else {
+				final int pair = lx >> 1;
+				final int v = (pair < 4) ? lsB0[n] : (pair < 8) ? lsB1[n] : lsB2[n];
+				
+				final int shift = 6 - 2 * (pair & 3);
+				final int two = (v >> shift) & 0x03;
+				
+				if (two == 0)
+					continue;
+
+				if (spriteHitMask != 0)
+					Memory.ram[0xD01E] |= (spriteHitMask | mask);
+				spriteHitMask |= mask;
+
+				if (!isBgTransparent(bgRgb))
+					Memory.ram[0xD01F] |= mask;
+
+				if (two == 1)
+					return lsMC1;
+				
+				if (two == 2)
+					return lsCol[n];
+				
+				return lsMC2;
+			}
+		}
+		return -1;
+	}
+
 	public static final void initialize(final Canvas canvas) {
 		final GraphicsEnvironment env = GraphicsEnvironment.getLocalGraphicsEnvironment();
 		final GraphicsDevice device = env.getDefaultScreenDevice();
+		
 		final GraphicsConfiguration config = device.getDefaultConfiguration();
-
 		final BufferedImage image = config.createCompatibleImage(w_width, w_height);
-		pixels = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
 
+		pixels = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
 		reset();
+
 		screen = new CRTThread(canvas, image);
 		screen.start();
 	}
-
+	
 	public static final void clock(final int cycles) {
-		final int lo = line & 0xff;
-		final int hi = (line & 0x100) >> 1;
+		vicCycle += cycles;
 
-		// Control registers 1 & 2
 		Memory.ram[0xd011] = Memory.ports[0x11];
 		Memory.ram[0xd016] = Memory.ports[0x16];
 
-		// store current line
-		Memory.ram[0xd012] = lo;
-		Memory.ram[0xd011] = Memory.ram[0xd011] & 127 | hi;
-
-		// acknowledge interrupt source (latch) 7 bit is IRQ inverted line
-		if (Memory.ports[0x19] != 0) {
-			Memory.ram[0xd019] &= ~Memory.ports[0x19];
+		final int ack = Memory.ports[0x19] & 0x0f;
+		if (ack != 0) {
+			Memory.ram[0xD019] &= ~ack;
 			Memory.ports[0x19] = 0;
 		}
 
-		Memory.ram[0xd01a] = Memory.ports[0x1a]; // interrupt mask
+		Memory.ram[0xd01a] = Memory.ports[0x1a] & 0x0f;
 
-		if (Memory.ports[0x12] == lo && (Memory.ports[0x11] & 128) == hi)
-			Memory.ram[0xd019] |= 1 | 128; // raster interrupt
+		if (vicCycle >= VIC_CYCLES_PER_LINE) {
+			vicCycle -= VIC_CYCLES_PER_LINE;
+			
+			line = (line + 1) % 312; // PAL
+			
+			final int lo = line & 0xff;
+			final int hi = (line & 0x100) >> 1;
+			
+			Memory.ram[0xd012] = lo;
+			Memory.ram[0xd011] = Memory.ram[0xd011] & 0x7f | hi;
+			
+			if (Memory.ports[0x12] == lo && (Memory.ports[0x11] & 0x80) == hi)
+				Memory.ram[0xd019] |= IRQ_RASTER;
+		}
+		
+		bad_line = isBadlineRaster(line) && vicCycle >= BADLINE_CYCLE_START && vicCycle <= BADLINE_CYCLE_END;
+		
+		final int sources = Memory.ram[0xd019] & 0x0f;
+		final int mask = Memory.ram[0xd01a] & 0x0f;
 
-		// copy PORTS -> RAM
+		final boolean pending = (sources & mask) != 0;
+		Memory.ram[0xd019] = sources | (pending ? IRQ_LINE : 0);
+		IRQ = pending;
+
 		Memory.ram[0xd020] = Memory.ports[0x20];
 		Memory.ram[0xd021] = Memory.ports[0x21];
 
-		// configure offset chargen and screen
 		final int bank = Memory.ports[0x18];
 		if (Memory.ram[0xd018] != bank) {
+			
 			Memory.ram[0xd018] = bank;
-
-			// TODO: change to shifting
-			chargen_address = ((bank & 0b1110) >> 1) * 2048 + offset;
-			screen_address = ((bank & 0b1110000) >> 4) * 1024 + offset;
-			graphics_address = (bank & 0b1000) == 0 ? offset : offset + 0x2000;
+			chargen_address = ((bank & 0x0E) << 10) + offset;
+			
+			screen_address = ((bank & 0xF0) << 6) + offset;
+			graphics_address = ((bank & 0x08) == 0) ? offset : offset + 0x2000;
 		}
 
 		updateScreen(cycles);
 		oldBeam = beam;
-
-		// interrupts occured?
-		IRQ = (Memory.ram[0xd019] & Memory.ram[0xd01a]) != 0;
 	}
 
 	public static final void updateScreen(final int cycles) {
@@ -142,55 +364,53 @@ public class VIC2 {
 		}
 	}
 
-	// standard text mode 40x25 characters
 	public static final void updateScreenStardardCharacter(final int cycles) {
-		beam += cycles << 3; // new beam position, 1 system tick = 8 bits on the screen
-
-		if (beam > raster_size) // beam outside the screen?
-			beam -= raster_size; // move to the start and skip a little
+		beam += cycles << 3;
+		
+		if (beam > raster_size)
+			beam -= raster_size;
 
 		int position = oldBeam;
-
-		// draw image starting at old beam position to a new one calculated on cpu
-		// cycles
-		final int fc = colors[Memory.ports[0x20] & 0xf]; // only 15 colors, 4 bit nibble
-		final int bc = colors[Memory.ports[0x21] & 0xf];
+		
+		final int fc = colors[Memory.ports[0x20] & 0xf];
+		final int bcLocal = colors[Memory.ports[0x21] & 0xf];
 
 		do {
-			bad_line = false;
-			line = position / r_width; // current raster line
+			final int renderLine = position / r_width;
+			if (renderLine > 13 && renderLine < 298) {
+				
+				final int column = position % r_width;
+				final int py = renderLine - CENTER_Y1;
+				final int row = py & 0b111;
 
-			if (line > 13 && line < 298) { // VBLANK
-				// final int column = position - line_ptr[line];
-				final int column = position % r_width; // current column
+				if (column > 49 && column < 453) {
+					if (renderLine >= CENTER_Y1 && renderLine <= CENTER_Y2 && column >= CENTER_X1 && column <= CENTER_X2) {
 
-				if (column > 49 && column < 453) { // HBLANK
-					if (line >= 56 && line <= 255 && column >= 90 && column <= 409) { // center frame
-						// draw screen character (single row)
-						final int py = line - 56;
-						final int m = code_ptr[py >> 3] + ((column - 90) >> 3); // 40x25 screen position
+						buildSpriteLineCache(renderLine);
+						final int m = code_ptr[py >> 3] + ((column - CENTER_X1) >> 3);
 
-						if (m != om) { // new position or same character?
-							code = Memory.fetchVIC2(screen_address + m); // fetch character screen code
-							pen = colors[(Memory.ram[0xd800 + m]) & 0xf]; // fetch character color
+						if (m != om) {
+							code = Memory.fetchVIC2(screen_address + m);
+							pen = colors[(Memory.ram[0xd800 + m]) & 0xf];
 						}
 
-						final int row = py & 0b111; // row in char set definition
-						bad_line = (row == 0); // every first row is the bad line
-
-						// fetch character definition or use previous code
 						final int ch = (code == ocode && oy == py) ? och
 								: Memory.fetchVIC2(chargen_address + ((code << 3) + row));
+
 						oy = py;
 						och = ch;
+						
 						om = m;
 						ocode = code;
 
-						// draw character on screen bit by bit
-						pixels[index] = (ch & bit) != 0 ? pen : bc; // foreground / background
+						final int bg = (ch & bit) != 0 ? pen : bcLocal;
+						final int spr = spriteOverlayFast(column, renderLine, bg);
+						
+						pixels[index] = (spr != -1) ? spr : bg;
 						bit = bit == 1 ? 128 : bit >> 1;
-					} else
-						pixels[index] = fc; // frame color
+					} else {
+						pixels[index] = fc;
+					}
 
 					if (index < window_size)
 						index++;
@@ -209,59 +429,53 @@ public class VIC2 {
 		oldBeam = beam;
 	}
 
-	// standard hires mode 320x200 pixels
 	public static final void updateScreenStardardBitmap(final int cycles) {
-		beam += cycles << 3; // new beam position, 1 system tick = 8 bits on the screen
-
-		if (beam > raster_size) // beam outside the screen?
-			beam -= raster_size; // move to the start and skip a little
+		beam += cycles << 3;
+		
+		if (beam > raster_size)
+			beam -= raster_size;
 
 		int position = oldBeam;
-
-		// draw image starting at old beam position to a new one calculated on cpu
-		// cycles
-		final int fc = colors[Memory.ports[0x20] & 0xf]; // only 15 colors, 4 bit nibble
+		final int fc = colors[Memory.ports[0x20] & 0xf];
 
 		do {
-			bad_line = false;
-			line = position / r_width; // current raster line
+			final int renderLine = position / r_width;
+			if (renderLine > 13 && renderLine < 298) {
+				
+				final int column = position % r_width;
+				final int py = renderLine - CENTER_Y1;
+				final int row = py & 0b111;
 
-			if (line > 13 && line < 298) { // VBLANK
-				// final int column = position - line_ptr[line];
-				final int column = position % r_width; // current column
+				if (column > 49 && column < 453) {
+					if (renderLine >= CENTER_Y1 && renderLine <= CENTER_Y2 && column >= CENTER_X1 && column <= CENTER_X2) {
 
-				if (column > 49 && column < 453) { // HBLANK
-					if (line >= 56 && line <= 255 && column >= 90 && column <= 409) { // center frame
-						// draw screen character (single row)
-						final int py = line - 56;
-						final int px = column - 90;
+						buildSpriteLineCache(renderLine);
 
-						final int m = code_ptr[py >> 3] + (px >> 3); // 40x25 color attributes
+						final int px = column - CENTER_X1;
+						final int m = code_ptr[py >> 3] + (px >> 3);
 
-						if (m != om) { // new position or same character?
-							code = Memory.fetchVIC2(screen_address + m); // fetch color from text screen mode
-
-							bc = colors[code & 0xf]; // pen low nibble
-							pen = colors[(code & 0xf0) >> 4]; // background upper nibble
+						if (m != om) {
+							code = Memory.fetchVIC2(screen_address + m);
+							bc = colors[code & 0xf];
+							pen = colors[(code & 0xf0) >> 4];
 						}
 
-						final int row = py & 0b111; // row in char set definition
-						bad_line = (row == 0); // every first row is the bad line
-
-						// fetch 8x8 definition or use previous code
-						final int ch = (om != m || py != oy) ? Memory.fetchVIC2(graphics_address + ((m << 3) + row))
-								: och;
+						final int ch = (om != m || py != oy) ? Memory.fetchVIC2(graphics_address + ((m << 3) + row)) : och;
 
 						oy = py;
 						och = ch;
+						
 						om = m;
 						ocode = code;
 
-						// draw character on screen bit by bit
-						pixels[index] = (ch & bit) != 0 ? pen : bc; // foreground / background
+						final int bg = (ch & bit) != 0 ? pen : bc;
+						final int spr = spriteOverlayFast(column, renderLine, bg);
+
+						pixels[index] = (spr != -1) ? spr : bg;
 						bit = bit == 1 ? 128 : bit >> 1;
-					} else
-						pixels[index] = fc; // frame color
+					} else {
+						pixels[index] = fc;
+					}
 
 					if (index < window_size)
 						index++;
@@ -280,57 +494,49 @@ public class VIC2 {
 		oldBeam = beam;
 	}
 
-	// multicolor text mode 40x25 characters
 	public static final void updateScreenMulticolorCharater(final int cycles) {
-		beam += cycles << 3; // new beam position, 1 system tick = 8 bits on the screen
-
-		if (beam > raster_size) // beam outside the screen?
-			beam -= raster_size; // move to the start and skip a little
+		beam += cycles << 3;
+		
+		if (beam > raster_size)
+			beam -= raster_size;
 
 		int position = oldBeam;
+		final int fc = colors[Memory.ports[0x20] & 0xf];
+		final int bcLocal = colors[Memory.ports[0x21] & 0xf];
 
-		// draw image starting at old beam position to a new one calculated on cpu
-		// cycles
-		final int fc = colors[Memory.ports[0x20] & 0xf]; // only 15 colors, 4 bit nibble
-		final int bc = colors[Memory.ports[0x21] & 0xf];
+		final int fc1 = colors[Memory.ports[0x22] & 0xf];
+		final int fc2 = colors[Memory.ports[0x23] & 0xf];
 
-		final int fc1 = colors[Memory.ports[0x22] & 0xf]; // 01
-		final int fc2 = colors[Memory.ports[0x23] & 0xf]; // 10
-
-		colorTable[0] = bc;
+		colorTable[0] = bcLocal;
 		colorTable[1] = fc1;
 		colorTable[2] = fc2;
 
 		do {
-			bad_line = false;
-			line = position / r_width; // current raster line
+			final int renderLine = position / r_width;
+			if (renderLine > 13 && renderLine < 298) {
+				
+				final int column = position % r_width;
+				final int py = renderLine - CENTER_Y1;
+				final int row = py & 0b111;
 
-			if (line > 13 && line < 298) { // VBLANK
-				// final int column = position - line_ptr[line];
-				final int column = position % r_width; // current column
+				if (column > 49 && column < 453) {
+					if (renderLine >= CENTER_Y1 && renderLine <= CENTER_Y2 && column >= CENTER_X1 && column <= CENTER_X2) {
 
-				if (column > 49 && column < 453) { // HBLANK
-					if (line >= 56 && line <= 255 && column >= 90 && column <= 409) { // center frame
-						// draw screen character (single row)
-						final int py = line - 56;
-						final int m = code_ptr[py >> 3] + ((column - 90) >> 3); // 40x25 screen position
-
-						if (m != om) { // new position or same character?
-							code = Memory.fetchVIC2(screen_address + m); // fetch character screen code
+						buildSpriteLineCache(renderLine);
+						final int m = code_ptr[py >> 3] + ((column - CENTER_X1) >> 3);
+						
+						if (m != om) {
+							code = Memory.fetchVIC2(screen_address + m);
 							cti = Memory.ram[0xd800 + m] & 0xf;
 
-							pen = colors[cti]; // fetch character color
-							hiresChar = (cti & 8) == 0; // display character in hires mode ?
+							pen = colors[cti];
+							hiresChar = (cti & 8) == 0;
 
 							colorTable[3] = colors[cti & 0b111];
 							ci = 0;
 							cc = false;
 						}
 
-						final int row = py & 0b111; // row in char set definition
-						bad_line = (row == 0); // every first row is the bad line
-
-						// fetch character definition or use previous code
 						final int ch = (code == ocode && oy == py) ? och
 								: Memory.fetchVIC2(chargen_address + ((code << 3) + row));
 
@@ -339,26 +545,31 @@ public class VIC2 {
 						om = m;
 						ocode = code;
 
-						// draw character on screen bit by bit
-						if (hiresChar)
-							pixels[index] = (ch & bit) == 0 ? bc : pen; // foreground / background
-						else {
+						if (hiresChar) {
+							final int bg = (ch & bit) == 0 ? bcLocal : pen;
+							final int spr = spriteOverlayFast(column, renderLine, bg);
+							
+							pixels[index] = (spr != -1) ? spr : bg;
+						} else {
 							ci = (ci << 1) | ((ch & bit) == 0 ? 0 : 1);
 							if (cc) {
 								final int cl = colorTable[ci];
 
-								pixels[index - 1] = cl; // two character bits per one pixel
-								pixels[index] = cl;
+								final int spr1 = spriteOverlayFast(column - 1, renderLine, cl);
+								pixels[index - 1] = (spr1 != -1) ? spr1 : cl;
+
+								final int spr2 = spriteOverlayFast(column, renderLine, cl);
+								pixels[index] = (spr2 != -1) ? spr2 : cl;
 
 								ci = 0;
 							}
-
 							cc = !cc;
 						}
 
 						bit = bit == 1 ? 128 : bit >> 1;
-					} else
-						pixels[index] = fc; // frame color
+					} else {
+						pixels[index] = fc;
+					}
 
 					if (index < window_size)
 						index++;
@@ -377,72 +588,66 @@ public class VIC2 {
 		oldBeam = beam;
 	}
 
-	// multicolor bitmap mode 160x200 characters
 	public static final void updateScreenMulticolorBitmap(final int cycles) {
-		beam += cycles << 3; // new beam position, 1 system tick = 8 bits on the screen
-
-		if (beam > raster_size) // beam outside the screen?
-			beam -= raster_size; // move to the start and skip a little
+		beam += cycles << 3;
+		
+		if (beam > raster_size)
+			beam -= raster_size;
 
 		int position = oldBeam;
 
-		// draw image starting at old beam position to a new one calculated on cpu
-		// cycles
 		colorTable[0] = colors[Memory.ports[0x21] & 0xf];
-		final int fc = colors[Memory.ports[0x20] & 0xf]; // only 15 colors, 4 bit nibble
+		final int fc = colors[Memory.ports[0x20] & 0xf];
 
 		do {
-			bad_line = false;
-			line = position / r_width; // current raster line
+			final int renderLine = position / r_width;
+			if (renderLine > 13 && renderLine < 298) {
+				
+				final int column = position % r_width;
+				final int py = renderLine - CENTER_Y1;
+				final int row = py & 0b111;
 
-			if (line > 13 && line < 298) { // VBLANK
-				// final int column = position - line_ptr[line];
-				final int column = position % r_width; // current column
-
-				if (column > 49 && column < 453) { // HBLANK
-					if (line >= 56 && line <= 255 && column >= 90 && column <= 409) { // center frame
-						// draw screen character (single row)
-						final int py = line - 56;
-						final int m = code_ptr[py >> 3] + ((column - 90) >> 3); // 40x25 screen position
-
-						if (m != om) { // new position or same character?
-							code = Memory.fetchVIC2(screen_address + m); // fetch character screen code
-
+				if (column > 49 && column < 453) {
+					if (renderLine >= CENTER_Y1 && renderLine <= CENTER_Y2 && column >= CENTER_X1 && column <= CENTER_X2) {
+						buildSpriteLineCache(renderLine);
+						
+						final int m = code_ptr[py >> 3] + ((column - CENTER_X1) >> 3);
+						if (m != om) {
+							code = Memory.fetchVIC2(screen_address + m);
 							colorTable[1] = colors[(code & 0xf0) >> 4];
 							colorTable[2] = colors[code & 0xf];
-							colorTable[3] = colors[Memory.ram[0xd800 + m] & 0xf]; // fetch character color
+							colorTable[3] = colors[Memory.ram[0xd800 + m] & 0xf];
 
 							ci = 0;
 							cc = false;
 						}
 
-						final int row = py & 0b111; // row in char set definition
-						bad_line = (row == 0); // every first row is the bad line
-
-						// fetch character definition or use previous code
-						final int ch = (om != m || py != oy) ? Memory.fetchVIC2(graphics_address + ((m << 3) + row))
-								: och;
+						final int ch = (om != m || py != oy) ? Memory.fetchVIC2(graphics_address + ((m << 3) + row)) : och;
 
 						oy = py;
 						och = ch;
+						
 						om = m;
 						ocode = code;
 
-						// draw character on screen bit by bit
 						ci = (ci << 1) | ((ch & bit) == 0 ? 0 : 1);
 						if (cc) {
 							final int cl = colorTable[ci];
 
-							pixels[index - 1] = cl; // two character bits per one pixel
-							pixels[index] = cl;
+							final int spr1 = spriteOverlayFast(column - 1, renderLine, cl);
+							pixels[index - 1] = (spr1 != -1) ? spr1 : cl;
+
+							final int spr2 = spriteOverlayFast(column, renderLine, cl);
+							pixels[index] = (spr2 != -1) ? spr2 : cl;
 
 							ci = 0;
 						}
 
 						cc = !cc;
 						bit = bit == 1 ? 128 : bit >> 1;
-					} else
-						pixels[index] = fc; // frame color
+					} else {
+						pixels[index] = fc;
+					}
 
 					if (index < window_size)
 						index++;
@@ -482,47 +687,53 @@ public class VIC2 {
 		IRQ = false;
 
 		beam = 0;
-		oldBeam = 0; // raster
+		oldBeam = 0;
+		
+		vicCycle = 0;
 		line = 0;
 
 		index = 0;
 		bit = 128;
 
-		screen_address = 0; // text screen start offset
-		chargen_address = 0; // chargen offset
-		graphics_address = 0; // graphic screen offset
+		screen_address = 0;
+		chargen_address = 0;
+		graphics_address = 0;
 
-		bad_line = false; // bad line marker
-		offset = 0; // VIC bank
+		bad_line = false;
+		offset = 0;
 
 		oy = -1;
 		om = -1;
+
 		och = -1;
 		ocode = -1;
+
 		code = 0;
 		pen = 0;
 
-		// multicolor text
 		hiresChar = false;
-		cc = false; // hires char in multicolor text mode - cc - color index calculated
-		ci = 0;
-		cti = 0; // color index, color table index
+		cc = false;
 
-		// hires
+		ci = 0;
+		cti = 0;
+
 		bc = 0;
+
+		cachedLine = -1;
+		lineSpriteCount = 0;
+		spriteHitMask = 0;
 
 		for (int i = 0; i < 0x2e; i++)
 			Memory.ports[i] = 0;
 
 		Memory.ports[0x11] = 0x1b;
-		Memory.ports[0x16] = 0xc8;
+		Memory.ports[0x16] = 0x08;
 		Memory.ports[0x18] = 0x20;
 	}
 }
 
 class ScreenThread extends Thread {
 	private Canvas canvas;
-
 	private boolean running = true;
 	private BufferedImage image;
 
@@ -542,7 +753,6 @@ class ScreenThread extends Thread {
 		final int ih = image.getHeight();
 
 		try {
-			// draw image 50 times per second (PAL)
 			while (running) {
 				long t = System.currentTimeMillis();
 
@@ -550,10 +760,10 @@ class ScreenThread extends Thread {
 				bufferStrategy.show();
 
 				final long d = System.currentTimeMillis();
-
-				t = 20 - (d - t); // drawing image took
-				t = t > 0 ? t : 20 - t; // skip frame
-				Thread.sleep(t); // 20ms - t
+				t = 20 - (d - t);
+				
+				t = t > 0 ? t : 20 - t;
+				Thread.sleep(t);
 			}
 		} catch (final InterruptedException e) {
 			running = false;
@@ -565,7 +775,6 @@ class ScreenThread extends Thread {
 
 class CRTThread extends Thread {
 	private Canvas canvas;
-
 	private boolean running = true;
 	private BufferedImage image;
 
@@ -578,34 +787,55 @@ class CRTThread extends Thread {
 		final BufferStrategy bufferStrategy = canvas.getBufferStrategy();
 		final Graphics gfx = bufferStrategy.getDrawGraphics();
 
-		final int cw = canvas.getWidth();
-		final int ch = canvas.getHeight();
-		
 		final int iw = 720;
 		final int ih = 576;
 
 		final BufferedImage crt = new BufferedImage(iw, ih, BufferedImage.TYPE_INT_RGB);
 		final int src[] = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
 		final int dst[] = ((DataBufferInt) crt.getRaster().getDataBuffer()).getData();
-		
+
 		FastPALcodec.init(image.getWidth(), image.getHeight(), src, dst);
-		
+
 		try {
-			// draw image 50 times per second (PAL)
 			while (running) {
 				long t = System.currentTimeMillis();
 
 				FastPALcodec.encodeYC();
 				FastPALcodec.decodeYC();
 
-				gfx.drawImage(crt, 0, 0, cw, ch, 0, 0, iw, ih, null);
+				final int cw = canvas.getWidth();
+				final int ch = canvas.getHeight();
+				
+				// perfect PAL: zachowaj aspect sygnału 720x576 (5:4)
+				final double targetAspect = (double) iw / (double) ih; // 1.25
+				final double canvasAspect = (double) cw / (double) ch;
+
+				int dw, dh, dx, dy;
+
+				if (canvasAspect > targetAspect) {
+				    // canvas za szeroki -> pasy po bokach
+				    dh = ch;
+				    dw = (int) Math.round(ch * targetAspect);
+				    
+				    dx = (cw - dw) / 2;
+				    dy = 0;
+				} else {
+				    // canvas za wysoki -> pasy góra/dół
+				    dw = cw;
+				    dh = (int) Math.round(cw / targetAspect);
+				    
+				    dx = 0;
+				    dy = (ch - dh) / 2;
+				}
+				
+				gfx.drawImage(crt, dx, dy, dw, dh, 0, 0, iw, ih, null);
 				bufferStrategy.show();
 
 				final long d = System.currentTimeMillis();
+				t = 20 - (d - t);
+				t = t > 0 ? t : 20 - t;
 
-				t = 20 - (d - t); // drawing image took
-				t = t > 0 ? t : 20 - t; // skip frame
-				Thread.sleep(t); // 20ms - t
+				Thread.sleep(t);
 			}
 		} catch (final InterruptedException e) {
 			running = false;

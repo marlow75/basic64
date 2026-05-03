@@ -4,336 +4,339 @@ import pl.dido.c64.emulator.Memory;
 
 public class MOS6502 {
 
-	public static int PC, AC, SP, X, Y; // 6510 registers
+    public static int PC, AC, SP, X, Y; // 6510 registers
 
-	public static int N; // 7- negative
-	public static int V; // 6- overflow
-	// --------------------------------
-	public static int B; // 4- break
-	public static int D; // 3- decimal
-	public static int I; // 2-interrupt
-	public static int Z; // 1- zero
-	public static int C; // 0- carry
-	
+    public static int N; // 7- negative
+    public static int V; // 6- overflow
+    // --------------------------------
+    public static int B; // 4- break
+    public static int D; // 3- decimal
+    public static int I; // 2-interrupt
+    public static int Z; // 1- zero
+    public static int C; // 0- carry
+
     public static interface CommandProcesor {
         public int processCommand(final MODE mode);
     }
-    
-    public static interface Operand {
-		public int calculateAddress();
-    } 
-    
-    // addressing mode
-    public enum MODE {    	
-    	ACCUMULATOR(() -> { 
-    		incPC();
-    		
-    		cycles = 0;
-    		return -1;
-    	}),
-        ABSOLUTE(() -> {
-			final int lo = Memory.fetch(PC);
-			incPC();
-			final int hi = Memory.fetch(PC);
-			incPC();
 
-			cycles = 0;
-			return word(lo, hi);			
+    public static interface Operand {
+        public int calculateAddress();
+    }
+
+    // addressing mode
+    public enum MODE {
+        ACCUMULATOR(() -> {
+            incPC();
+            cycles = 0;
+            return -1;
+        }),
+        ABSOLUTE(() -> {
+            final int lo = Memory.fetch(PC);
+            incPC();
+            final int hi = Memory.fetch(PC);
+            incPC();
+
+            cycles = 0;
+            return word(lo, hi);
         }),
         ABSOLUTE_Y(() -> {
-			final int lo = Memory.fetch(PC);
-			incPC();
-			final int hi = Memory.fetch(PC);
-			incPC();
+            final int lo = Memory.fetch(PC);
+            incPC();
+            final int hi = Memory.fetch(PC);
+            incPC();
 
-			final int oldALU = word(lo, hi);
-			final int ALU = oldALU + Y & 0xffff;
-			
-			cycles = (((ALU ^ oldALU) & 0xff00) == 0) ? 0: 1;
-			return ALU;
+            final int oldALU = word(lo, hi);
+            final int ALU = (oldALU + Y) & 0xffff;
+
+            // dodatkowy cykl przy przekroczeniu strony
+            cycles = (((ALU ^ oldALU) & 0xff00) == 0) ? 0 : 1;
+            return ALU;
         }),
         ABSOLUTE_X(() -> {
-			final int lo = Memory.fetch(PC);
-			incPC();
-			final int hi = Memory.fetch(PC);
-			incPC();
+            final int lo = Memory.fetch(PC);
+            incPC();
+            final int hi = Memory.fetch(PC);
+            incPC();
 
-			final int oldALU = word(lo, hi);
-			final int ALU = oldALU + X & 0xffff;
-			
-			cycles = (((ALU ^ ALU) & 0xff00) == 0) ? 0: 1;
-			return ALU;
+            final int oldALU = word(lo, hi);
+            final int ALU = (oldALU + X) & 0xffff;
+
+            // POPRAWKA: wcześniej było (ALU ^ ALU) → zawsze 0
+            cycles = (((ALU ^ oldALU) & 0xff00) == 0) ? 0 : 1;
+            return ALU;
         }),
         IMMEDIATE(() -> {
-        	final int address = PC;
-        	incPC();
-        	
-        	cycles = 0;
-        	return address;
+            final int address = PC;
+            incPC();
+
+            cycles = 0;
+            return address;
         }),
         IMPLIED(() -> {
-        	cycles = 0;
-        	return 0;
+            cycles = 0;
+            return 0;
         }),
         INDIRECT(() -> {
-			int lo = Memory.fetch(PC);
-			incPC();
-			int hi = Memory.fetch(PC);
-			incPC();			
-									
-			int ALU = word(lo, hi);
+            int lo = Memory.fetch(PC);
+            incPC();
+            int hi = Memory.fetch(PC);
+            incPC();
 
-			lo = Memory.fetch(ALU);
-			ALU = ++ALU & 0xffff;	// bug fixed
-			hi = Memory.fetch(ALU);
+            int ALU = word(lo, hi);
 
-			return word(lo, hi);
+            lo = Memory.fetch(ALU);
+            ALU = (ALU + 1) & 0xffff; // bug fixed
+            hi = Memory.fetch(ALU);
+
+            return word(lo, hi);
         }),
         INDIRECT_X(() -> {
-        	int ALU = Memory.fetch(PC);
-			incPC();
-			ALU = (ALU + X) & 0xff;
+            int ALU = Memory.fetch(PC);
+            incPC();
+            ALU = (ALU + X) & 0xff;
 
-			final int lo = Memory.fetch(ALU);
-			ALU = ++ALU & 0xff;
-			final int hi = Memory.fetch(ALU);
-			
-			cycles = 0;
-			return word(lo, hi); 
+            final int lo = Memory.fetch(ALU);
+            ALU = (ALU + 1) & 0xff;
+            final int hi = Memory.fetch(ALU);
+
+            cycles = 0;
+            return word(lo, hi);
         }),
         INDIRECT_Y(() -> {
-			int ALU = Memory.fetch(PC);
-			incPC();
+            int zpAddr = Memory.fetch(PC);
+            incPC();
 
-			final int lo = Memory.fetch(ALU);
-			ALU = ++ALU & 0xff;
-			final int hi = Memory.fetch(ALU);
+            final int lo = Memory.fetch(zpAddr);
+            zpAddr = (zpAddr + 1) & 0xff;
+            final int hi = Memory.fetch(zpAddr);
 
-			final int oldALU = word(lo, hi);
-			final int address = (oldALU + Y) & 0xffff;
+            final int oldALU = word(lo, hi);
+            final int address = (oldALU + Y) & 0xffff;
 
-			cycles = (((ALU ^ oldALU) & 0xff00) == 0) ? 0: 1;			
-			return address; 
-        }),        
+            // POPRAWKA: sprawdzamy address vs oldALU, nie ALU vs oldALU
+            cycles = (((address ^ oldALU) & 0xff00) == 0) ? 0 : 1;
+            return address;
+        }),
         RELATIVE(() -> {
-    		final byte rel = (byte) Memory.fetch(PC);
-    		incPC();
-    		final int oPC = PC;
+            final byte rel = (byte) Memory.fetch(PC);
+            incPC();
+            final int oPC = PC;
 
-    		final int address = (PC + rel) & 0xffff;
-    		cycles = (((oPC ^ PC) & 0xff00) != 0) ? 0: 1;
-    		
-    		return address;
+            final int address = (PC + rel) & 0xffff;
+            // POPRAWKA: porównujemy oPC i address, nie oPC i PC
+            cycles = (((oPC ^ address) & 0xff00) != 0) ? 1 : 0;
+
+            return address;
         }),
         ZEROPAGE(() -> {
-			final int address = Memory.fetch(PC);
-			incPC();
-			
-			cycles = 0;
-			return address;
+            final int address = Memory.fetch(PC);
+            incPC();
+
+            cycles = 0;
+            return address;
         }),
         ZEROPAGE_X(() -> {
-        	final int address = (Memory.fetch(PC) + X) & 0xff;
-        	incPC();
-        	
-        	cycles = 0;
-        	return address;
+            final int address = (Memory.fetch(PC) + X) & 0xff;
+            incPC();
+
+            cycles = 0;
+            return address;
         }),
         ZEROPAGE_Y(() -> {
-        	final int address = (Memory.fetch(PC) + Y) & 0xff;
-        	incPC();
-        	
-        	cycles = 0;
-        	return address;
+            final int address = (Memory.fetch(PC) + Y) & 0xff;
+            incPC();
+
+            cycles = 0;
+            return address;
         });
-        
-    	private static int cycles;    	
+
+        private static int cycles;
         private Operand operand;
-    	
-    	MODE(final Operand operand) {
-    		this.operand = operand;
-    	}
-    	
-    	public final Operand operand() {
-    		return operand;
-    	}
-    	
-    	public final int getCycles() {
-    		return cycles;
-    	}    	
+
+        MODE(final Operand operand) {
+            this.operand = operand;
+        }
+
+        public final Operand operand() {
+            return operand;
+        }
+
+        public final int getCycles() {
+            return cycles;
+        }
     }
-	
-	// all 6510 commands
+
+    // all 6510 commands
     public enum COMMAND {
         ADC((mode) -> {
-        	final int value = Memory.fetch(mode.operand().calculateAddress());
+            final int value = Memory.fetch(mode.operand().calculateAddress());
 
-			if (D == 8) {
-				int ALU = (AC & 0xf) + (value & 0xf) + C;
-				ALU += ALU > 9 ? 6 : 0;
+            if (D == 8) {
+                int ALU = (AC & 0xf) + (value & 0xf) + C;
+                ALU += ALU > 9 ? 6 : 0;
 
-				/*
-				 * Negative and Overflow flags are set with the same logic than in Binary mode,
-				 * but after fixing the lower nibble.
-				 */
-				ALU = (ALU > 0xf) ? (ALU & 0xf) + (AC & 0xf0) + (value & 0xf0) + 0x10
-						: (ALU & 0xf) + (AC & 0xf0) + (value & 0xf0);
+                /*
+                 * Negative and Overflow flags are set with the same logic than in Binary mode,
+                 * but after fixing the lower nibble.
+                 */
+                ALU = (ALU > 0xf) ? (ALU & 0xf) + (AC & 0xf0) + (value & 0xf0) + 0x10
+                        : (ALU & 0xf) + (AC & 0xf0) + (value & 0xf0);
 
-				N = ALU & 0x80;
-				V = ((AC ^ ALU) & (value ^ ALU) & 0x80) >> 1;
+                N = ALU & 0x80;
+                V = ((AC ^ ALU) & (value ^ ALU) & 0x80) >> 1;
 
-				if ((ALU & 0x1f0) > 0x90)
-					ALU += 0x60; // BCD fixup for upper nibble.
+                if ((ALU & 0x1f0) > 0x90)
+                    ALU += 0x60; // BCD fixup for upper nibble.
 
-				// carry is the only flag set after fixing the result.
-				C = ALU > 0xff ? 1 : 0;
+                // carry is the only flag set after fixing the result.
+                C = ALU > 0xff ? 1 : 0;
 
-				Z = ((AC + value + C) & 0xff) == 0 ? 2 : 0; // Zero flag is set just like in Binary mode.
-				AC = ALU & 0xff;
-			} else {
-				// binary mode
-				final int ALU = addC(AC, value); // with carry
+                Z = ((AC + value + C) & 0xff) == 0 ? 2 : 0; // Zero flag is set just like in Binary mode.
+                AC = ALU & 0xff;
+            } else {
+                // binary mode
+                final int ALU = addC(AC, value); // with carry
 
-				V = ((AC ^ ALU) & (value ^ ALU) & 0x80) >> 1;
-				AC = ALU;
-			}
-			
-			return mode.getCycles();
+                V = ((AC ^ ALU) & (value ^ ALU) & 0x80) >> 1;
+                AC = ALU;
+            }
+
+            return mode.getCycles();
         }),
         AND((mode) -> {
-			AC &= Memory.fetch(mode.operand().calculateAddress());
+            AC &= Memory.fetch(mode.operand().calculateAddress());
 
-			setNZ(AC);			
-			return mode.getCycles();
+            setNZ(AC);
+            return mode.getCycles();
         }),
         ASL((mode) -> {
-        	final int address = mode.operand().calculateAddress();
-			int ALU = Memory.fetch(address) << 1;
-			
-			C = ALU > 255 ? 1 : 0;
-			ALU &= 0xff;
-			setNZ(ALU);
+            final int address = mode.operand().calculateAddress();
+            int ALU = Memory.fetch(address) << 1;
 
-			Memory.store(address, ALU);
-			return mode.getCycles();
+            C = ALU > 255 ? 1 : 0;
+            ALU &= 0xff;
+            setNZ(ALU);
+
+            Memory.store(address, ALU);
+            return mode.getCycles();
         }),
         ASL_A((mode) -> {
-			AC <<= 1;
-			
-			C = AC > 255 ? 1 : 0;
-			AC &= 0xff;
-			setNZ(AC);
+            AC <<= 1;
 
-			return mode.getCycles();
+            C = AC > 255 ? 1 : 0;
+            AC &= 0xff;
+            setNZ(AC);
+
+            return mode.getCycles();
         }),
         BCC((mode) -> {
-        	final int address = mode.operand().calculateAddress();
-        	
-        	if (C == 0) {
+            final int address = mode.operand().calculateAddress();
+
+            if (C == 0) {
                 PC = address;
                 return mode.getCycles();
             }
-        	
-        	return 0;
+
+            return 0;
         }),
         BCS((mode) -> {
-        	final int address = mode.operand().calculateAddress();
-        	
-        	if (C == 1) {
+            final int address = mode.operand().calculateAddress();
+
+            if (C == 1) {
                 PC = address;
                 return mode.getCycles();
             }
-        	
-        	return 0;
+
+            return 0;
         }),
         BEQ((mode) -> {
-        	final int address = mode.operand().calculateAddress();
-        	
-        	if (Z == 2) {
+            final int address = mode.operand().calculateAddress();
+
+            if (Z == 2) {
                 PC = address;
                 return mode.getCycles();
             }
-        	
-        	return 0;
+
+            return 0;
         }),
         BIT((mode) -> {
-			final int value = Memory.fetch(mode.operand().calculateAddress());
-			final int ALU = AC & value;
+            final int value = Memory.fetch(mode.operand().calculateAddress());
+            final int ALU = AC & value;
 
-			Z = (ALU == 0) ? 2 : 0;
-			V = value & 0x40;
-			N = value & 0x80;
+            Z = (ALU == 0) ? 2 : 0;
+            V = value & 0x40;
+            N = value & 0x80;
 
-			return mode.getCycles();
+            return mode.getCycles();
         }),
         BMI((mode) -> {
-        	final int address = mode.operand().calculateAddress();
-        	
-        	if (N == 128) {
+            final int address = mode.operand().calculateAddress();
+
+            if (N == 128) {
                 PC = address;
                 return mode.getCycles();
             }
-        	
-        	return 0;
+
+            return 0;
         }),
         BNE((mode) -> {
-        	final int address = mode.operand().calculateAddress();
-        	
-        	if (Z == 0) {
+            final int address = mode.operand().calculateAddress();
+
+            if (Z == 0) {
                 PC = address;
                 return mode.getCycles();
             }
-        	
-        	return 0;
+
+            return 0;
         }),
         BPL((mode) -> {
-        	final int address = mode.operand().calculateAddress();
-        	
-        	if (N == 0) {
+            final int address = mode.operand().calculateAddress();
+
+            if (N == 0) {
                 PC = address;
                 return mode.getCycles();
             }
-        	
-        	return 0;
+
+            return 0;
         }),
         BRK((mode) -> {
-			final int ALU = (PC + 1) & 0xffff; // return address
+            final int ALU = (PC + 1) & 0xffff; // return address
 
-			int hi = ALU >>> 8;
-			int lo = ALU & 0xff;
+            int hi = ALU >>> 8;
+            int lo = ALU & 0xff;
 
-			push(hi);
-			push(lo);
+            push(hi);
+            push(lo);
 
-			B = 16;
-			push(packFlags());
-			I = 4;
+            B = 16;
+            push(packFlags());
+            I = 4;
 
-			lo = Memory.fetch(0xFFFE);
-			hi = Memory.fetch(0xFFFF);
+            lo = Memory.fetch(0xFFFE);
+            hi = Memory.fetch(0xFFFF);
 
-			PC = word(lo, hi);
-			return 0;
+            PC = word(lo, hi);
+            return 0;
         }),
         BVC((mode) -> {
-        	final int address = mode.operand().calculateAddress();
-        	
-        	if (V == 0) {
+            final int address = mode.operand().calculateAddress();
+
+            if (V == 0) {
                 PC = address;
                 return mode.getCycles();
             }
-        	
-        	return 0;        
+
+            return 0;
         }),
         BVS((mode) -> {
-        	final int address = mode.operand().calculateAddress();
-        	
-        	if (V == 64) {
+            final int address = mode.operand().calculateAddress();
+
+            if (V == 64) {
                 PC = address;
                 return mode.getCycles();
             }
-        	
-        	return 0;
+
+            return 0;
         }),
         CLC((mode) -> {
             return C = 0;
@@ -348,315 +351,311 @@ public class MOS6502 {
             return V = 0;
         }),
         CMP((mode) -> {
-			sub(AC, Memory.fetch(mode.operand().calculateAddress()));
-			return mode.getCycles();
+            sub(AC, Memory.fetch(mode.operand().calculateAddress()));
+            return mode.getCycles();
         }),
         CPX((mode) -> {
-        	sub(X, Memory.fetch(mode.operand().calculateAddress()));
-        	return mode.getCycles();
+            sub(X, Memory.fetch(mode.operand().calculateAddress()));
+            return mode.getCycles();
         }),
         CPY((mode) -> {
-        	sub(Y, Memory.fetch(mode.operand().calculateAddress()));
-        	return mode.getCycles();
+            sub(Y, Memory.fetch(mode.operand().calculateAddress()));
+            return mode.getCycles();
         }),
         DEC((mode) -> {
-        	final int address = mode.operand().calculateAddress();
-			final int ALU = (Memory.fetch(address) - 1) & 0xff;
-			setNZ(ALU);
-			
-			Memory.store(address, ALU);
-			return mode.getCycles();
+            final int address = mode.operand().calculateAddress();
+            final int ALU = (Memory.fetch(address) - 1) & 0xff;
+            setNZ(ALU);
+
+            Memory.store(address, ALU);
+            return mode.getCycles();
         }),
         DEX((mode) -> {
-			X = --X & 0xff;
-			setNZ(X);
-			
-			return 0;
+            X = --X & 0xff;
+            setNZ(X);
+
+            return 0;
         }),
         DEY((mode) -> {
-			Y = --Y & 0xff;
-			setNZ(Y);
-			
-			return 0;
+            Y = --Y & 0xff;
+            setNZ(Y);
+
+            return 0;
         }),
         EOR((mode) -> {
-			AC ^= Memory.fetch(mode.operand().calculateAddress());
+            AC ^= Memory.fetch(mode.operand().calculateAddress());
 
-			setNZ(AC);
-			return mode.getCycles();
+            setNZ(AC);
+            return mode.getCycles();
         }),
         INC((mode) -> {
-        	final int address = mode.operand().calculateAddress();
-        	final int ALU = (Memory.fetch(address) + 1) & 0xff;
-			
-        	setNZ(ALU);
-			Memory.store(address, ALU);
+            final int address = mode.operand().calculateAddress();
+            final int ALU = (Memory.fetch(address) + 1) & 0xff;
 
-			return mode.getCycles();
+            setNZ(ALU);
+            Memory.store(address, ALU);
+
+            return mode.getCycles();
         }),
         INX((mode) -> {
-        	X = ++X & 0xff;
-			
-        	setNZ(X);
-			return 0;
+            X = ++X & 0xff;
+
+            setNZ(X);
+            return 0;
         }),
         INY((mode) -> {
-        	Y = ++Y & 0xff;
-			
-        	setNZ(Y);
-			return 0;
+            Y = ++Y & 0xff;
+
+            setNZ(Y);
+            return 0;
         }),
         JMP((mode) -> {
             PC = mode.operand().calculateAddress();
             return mode.getCycles();
         }),
         JSR((mode) -> {
-			int ALU = (PC + 1) & 0xffff;
+            int ALU = (PC + 1) & 0xffff;
 
-			int hi = ALU >>> 8;
-			int lo = ALU & 0xff;
+            int hi = ALU >>> 8;
+            int lo = ALU & 0xff;
 
-			push(hi);
-			push(lo);
+            push(hi);
+            push(lo);
 
-			lo = Memory.fetch(PC);
-			incPC();
-			
-			hi = Memory.fetch(PC);
-			PC = word(lo, hi);
-			
-			return 0;
+            lo = Memory.fetch(PC);
+            incPC();
+
+            hi = Memory.fetch(PC);
+            PC = word(lo, hi);
+
+            return 0;
         }),
         LDA((mode) -> {
-			AC = Memory.fetch(mode.operand().calculateAddress());
+            AC = Memory.fetch(mode.operand().calculateAddress());
 
-			setNZ(AC);
-			return mode.getCycles();
+            setNZ(AC);
+            return mode.getCycles();
         }),
         LDX((mode) -> {
-			X = Memory.fetch(mode.operand().calculateAddress());
+            X = Memory.fetch(mode.operand().calculateAddress());
 
-			setNZ(X);
-			return mode.getCycles();
+            setNZ(X);
+            return mode.getCycles();
         }),
         LDY((mode) -> {
-			Y = Memory.fetch(mode.operand().calculateAddress());
+            Y = Memory.fetch(mode.operand().calculateAddress());
 
-			setNZ(Y);
-			return mode.getCycles();
+            setNZ(Y);
+            return mode.getCycles();
         }),
         LSR((mode) -> {
-        	final int address = mode.operand().calculateAddress();
-			final int value = Memory.fetch(address);
+            final int address = mode.operand().calculateAddress();
+            final int value = Memory.fetch(address);
 
-			C = value & 0b1;
-			final int ALU = value >> 1;
+            C = value & 0b1;
+            final int ALU = value >> 1;
 
-			setNZ(ALU);
-			Memory.store(address, ALU);
-			
-			return mode.getCycles();
+            setNZ(ALU);
+            Memory.store(address, ALU);
+
+            return mode.getCycles();
         }),
         LSR_A((mode) -> {
-			C = AC & 0b1;
-			AC >>= 1;
+            C = AC & 0b1;
+            AC >>= 1;
 
-			setNZ(AC);
-			
-			return mode.getCycles();
+            setNZ(AC);
+            return mode.getCycles();
         }),
         NOP((mode) -> {
-        	return 0;
+            return 0;
         }),
         ORA((mode) -> {
-			AC |= Memory.fetch(mode.operand().calculateAddress());
+            AC |= Memory.fetch(mode.operand().calculateAddress());
 
-			setNZ(AC);
-			return mode.getCycles();
+            setNZ(AC);
+            return mode.getCycles();
         }),
         PHA((mode) -> {
             push(AC);
             return 0;
         }),
         PHP((mode) -> {
-        	push(packFlags());
-        	return 0;
+            push(packFlags());
+            return 0;
         }),
         PLA((mode) -> {
-			AC = pull();
-			setNZ(AC);
-			
-			return 0;
+            AC = pull();
+            setNZ(AC);
+
+            return 0;
         }),
         PLP((mode) -> {
-			unpackFlags(pull());
-			return 0;
+            unpackFlags(pull());
+            return 0;
         }),
         ROL((mode) -> {
-        	final int address = mode.operand().calculateAddress();
-			int ALU = (Memory.fetch(address) << 1) | C;
+            final int address = mode.operand().calculateAddress();
+            int ALU = (Memory.fetch(address) << 1) | C;
 
-			C = ALU > 255 ? 1 : 0;
-			ALU &= 0xff;
-			setNZ(ALU);
+            C = ALU > 255 ? 1 : 0;
+            ALU &= 0xff;
+            setNZ(ALU);
 
-			Memory.store(address, ALU);
-			return mode.getCycles();
+            Memory.store(address, ALU);
+            return mode.getCycles();
         }),
         ROL_A((mode) -> {
-			AC = (AC << 1) | C;
+            AC = (AC << 1) | C;
 
-			C = AC > 255 ? 1 : 0;
-			AC &= 0xff;
-			setNZ(AC);
+            C = AC > 255 ? 1 : 0;
+            AC &= 0xff;
+            setNZ(AC);
 
-			return 0;
+            return 0;
         }),
         ROR((mode) -> {
-        	final int address = mode.operand().calculateAddress();
-			int ALU = Memory.fetch(address);
+            final int address = mode.operand().calculateAddress();
+            int ALU = Memory.fetch(address);
 
-			final int o = ALU & 0b1;
-			ALU = ALU >> 1 | 128 * C;
-			C = o;
+            final int o = ALU & 0b1;
+            ALU = (ALU >> 1) | (128 * C);
+            C = o;
 
-			setNZ(ALU);
-			Memory.store(address, ALU);
-			
-			return mode.getCycles();
+            setNZ(ALU);
+            Memory.store(address, ALU);
+
+            return mode.getCycles();
         }),
         ROR_A((mode) -> {
-			final int o = AC & 0b1;
-			AC = AC >> 1 | 128 * C;
-			
-			C = o;
-			setNZ(AC);
-			
-			return 0;
+            final int o = AC & 0b1;
+            AC = (AC >> 1) | (128 * C);
+
+            C = o;
+            setNZ(AC);
+
+            return 0;
         }),
         RTI((mode) -> {
-			unpackFlags(pull());
-			final int lo = pull();
-			final int hi = pull();
+            unpackFlags(pull());
+            final int lo = pull();
+            final int hi = pull();
 
-			PC = word(lo, hi);
-			return 0;
+            PC = word(lo, hi);
+            return 0;
         }),
         RTS((mode) -> {
-        	final int lo = pull();
-			final int hi = pull();
+            final int lo = pull();
+            final int hi = pull();
 
-			PC = (word(lo, hi) + 1) & 0xffff;
-			return 0;
+            PC = (word(lo, hi) + 1) & 0xffff;
+            return 0;
         }),
         SBC((mode) -> {
-        	final int value = Memory.fetch(mode.operand().calculateAddress());
+            final int value = Memory.fetch(mode.operand().calculateAddress());
 
-			if (D == 8) { // decimal mode
-				final int notC = (C ^ 0b1);
-				int AL = (AC & 0xf) - (value & 0xf) - notC; // Calculate the lower nibble.
+            if (D == 8) { // decimal mode
+                final int notC = (C ^ 0b1);
+                int AL = (AC & 0xf) - (value & 0xf) - notC; // Calculate the lower nibble.
 
-				final int k = (AL & 0x10) >> 4;
-				AL -= k * 6; // BCD fixup for lower nibble.
+                final int k = (AL & 0x10) >> 4;
+                AL -= k * 6; // BCD fixup for lower nibble.
 
-				int AH = (AC & 0xf0) - (value & 0xf0) - k * 0x10; // Calculate the upper nibble.
+                int AH = (AC & 0xf0) - (value & 0xf0) - k * 0x10; // Calculate the upper nibble.
 
-				if ((AH & 0x100) == 0x100)
-					AH -= 0x60; // BCD fixup for upper nibble.
+                if ((AH & 0x100) == 0x100)
+                    AH -= 0x60; // BCD fixup for upper nibble.
 
-				// The flags are set just like in Binary mode.
-				final int sum = (AC - value - notC) & 0x1ff;
+                // The flags are set just like in Binary mode.
+                final int sum = (AC - value - notC) & 0x1ff;
 
-				C = (sum < 0x100) ? 1 : 0;
-				Z = (sum & 0xff) == 0 ? 2 : 0;
-				V = ((AC ^ sum) & (value ^ sum) & 0x80) >> 1;
-				N = sum & 0x80;
+                C = (sum < 0x100) ? 1 : 0;
+                Z = (sum & 0xff) == 0 ? 2 : 0;
+                V = ((AC ^ sum) & (value ^ sum) & 0x80) >> 1;
+                N = sum & 0x80;
 
-				AC = (AH & 0xf0) | (AL & 0xf);
-			} else {
-				int ALU = subC(AC, value); // with carry
+                AC = (AH & 0xf0) | (AL & 0xf);
+            } else {
+                int ALU = subC(AC, value); // with carry
 
-				V = ((AC ^ ALU) & (value ^ ALU) & 0x80) >> 1;
-				AC = ALU;
-			}
-			
-			return mode.getCycles();
+                V = ((AC ^ ALU) & (value ^ ALU) & 0x80) >> 1;
+                AC = ALU;
+            }
+
+            return mode.getCycles();
         }),
         SEC((mode) -> {
             C = 1;
             return 0;
         }),
         SED((mode) -> {
-			D = 8;
-			return 0;
+            D = 8;
+            return 0;
         }),
         SEI((mode) -> {
-			I = 4;
-			return 0;
+            I = 4;
+            return 0;
         }),
         STA((mode) -> {
-			Memory.store(mode.operand().calculateAddress(), AC);
-			
-			return mode.getCycles();
+            Memory.store(mode.operand().calculateAddress(), AC);
+            return mode.getCycles();
         }),
         STX((mode) -> {
-			Memory.store(mode.operand().calculateAddress(), X);
-			
-			return mode.getCycles();
+            Memory.store(mode.operand().calculateAddress(), X);
+            return mode.getCycles();
         }),
         STY((mode) -> {
-			Memory.store(mode.operand().calculateAddress(), Y);
-			
-			return mode.getCycles();
+            Memory.store(mode.operand().calculateAddress(), Y);
+            return mode.getCycles();
         }),
         TAX((mode) -> {
             X = AC;
             setNZ(X);
-            
+
             return 0;
         }),
         TAY((mode) -> {
             Y = AC;
             setNZ(Y);
-            
+
             return 0;
         }),
         TSX((mode) -> {
-        	X = SP;
-			setNZ(X);
+            X = SP;
+            setNZ(X);
 
-			return 0;
+            return 0;
         }),
         TXA((mode) -> {
-			AC = X;
-			setNZ(AC);
-			
-			return 0;
+            AC = X;
+            setNZ(AC);
+
+            return 0;
         }),
         TXS((mode) -> {
-        	SP = X;
-        	return 0;
+            SP = X;
+            return 0;
         }),
         TYA((mode) -> {
-			AC = Y;
-			setNZ(AC);
-			
-			return 0;
+            AC = Y;
+            setNZ(AC);
+
+            return 0;
         });
-    	
-    	private CommandProcesor cmd;
-    	
+
+        private CommandProcesor cmd;
+
         private COMMAND(final CommandProcesor cmd) {
             this.cmd = cmd;
         }
-        
+
         public int processCommand(final MODE mode) {
-        	return cmd.processCommand(mode);
+            return cmd.processCommand(mode);
         }
     };
-	
-	// all opcodes
-	public enum OPCODE {
+
+    // all opcodes
+    public enum OPCODE {
         ADC_IMM(0x0069, COMMAND.ADC, MODE.IMMEDIATE, 2),
         ADC_ZP(0x0065, COMMAND.ADC, MODE.ZEROPAGE, 3),
         ADC_ZP_X(0x0075, COMMAND.ADC, MODE.ZEROPAGE_X, 4),
@@ -753,7 +752,7 @@ public class MOS6502 {
         LSR_ZP_X(0x0056, COMMAND.LSR, MODE.ZEROPAGE_X, 6),
         LSR_AB(0x004E, COMMAND.LSR, MODE.ABSOLUTE, 6),
         LSR_AB_X(0x005E, COMMAND.LSR, MODE.ABSOLUTE_X, 7),
-        NOP(0x00EA, COMMAND.NOP, MODE.IMPLIED, 2),        
+        NOP(0x00EA, COMMAND.NOP, MODE.IMPLIED, 2),
         ORA_IMM(0x0009, COMMAND.ORA, MODE.IMMEDIATE, 2),
         ORA_ZP(0x0005, COMMAND.ORA, MODE.ZEROPAGE, 3),
         ORA_ZP_X(0x0015, COMMAND.ORA, MODE.ZEROPAGE_X, 4),
@@ -808,190 +807,189 @@ public class MOS6502 {
         TXA(0x008A, COMMAND.TXA, MODE.IMPLIED, 2),
         TXS(0x009A, COMMAND.TXS, MODE.IMPLIED, 2),
         TYA(0x0098, COMMAND.TYA, MODE.IMPLIED, 2);
-		
+
         private int code;
-		private COMMAND command;
-		
-		private MODE mode;
-		private int cycles;
-		
+        private COMMAND command;
+
+        private MODE mode;
+        private int cycles;
+
         private OPCODE(final int code, final COMMAND command, final MODE mode, final int cycles) {
             this.code = code;
             this.command = command;
             this.mode = mode;
             this.cycles = cycles;
         }
-        
+
         public int execute() {
-        	return cycles + command.processCommand(mode);
+            return cycles + command.processCommand(mode);
         }
-	}
-	
-	static private OPCODE[] opcodes;
+    }
+
+    static private OPCODE[] opcodes;
 
     static {
         opcodes = new OPCODE[256];
-        
-        for (final OPCODE o: OPCODE.values())
+
+        for (final OPCODE o : OPCODE.values())
             opcodes[o.code] = o;
     }
 
-	// increment program counter
-	private static final void incPC() {
-		PC = ++PC & 0xffff;
-	}
+    // increment program counter
+    private static final void incPC() {
+        PC = (PC + 1) & 0xffff;
+    }
 
-	// increment stack pointer
-	private static final void incSP() {
-		SP = ++SP & 0xff;
-	}
+    // increment stack pointer
+    private static final void incSP() {
+        SP = (SP + 1) & 0xff;
+    }
 
-	// decrement stack pointer
-	private static final void decSP() {
-		SP = --SP & 0xff;
-	}
+    // decrement stack pointer
+    private static final void decSP() {
+        SP = (SP - 1) & 0xff;
+    }
 
-	// make word from lo and hi bytes
-	private static final int word(final int lo, final int hi) {
-		return (hi << 8) | lo;
-	}
+    // make word from lo and hi bytes
+    private static final int word(final int lo, final int hi) {
+        return (hi << 8) | (lo & 0xff);
+    }
 
-	// set Negative and Zero flags
-	private static final void setNZ(final int value) {
-		Z = (value == 0) ? 2 : 0;
-		N = value & 0x80;
-	}
+    // set Negative and Zero flags
+    private static final void setNZ(final int value) {
+        Z = ((value & 0xff) == 0) ? 2 : 0;
+        N = value & 0x80;
+    }
 
-	// push value at stack
-	private static final void push(final int data) {
-		Memory.store(0x0100 | SP, data & 0xff);
-		decSP();
-	}
+    // push value at stack
+    private static final void push(final int data) {
+        Memory.store(0x0100 | SP, data & 0xff);
+        decSP();
+    }
 
-	// pull value from stack
-	private static final int pull() {
-		incSP();
-		return Memory.fetch(0x0100 | SP);
-	}
+    // pull value from stack
+    private static final int pull() {
+        incSP();
+        return Memory.fetch(0x0100 | SP);
+    }
 
-	// clear all registers
-	public static final void clearREG() {
-		SP = 0xff;
+    // clear all registers
+    public static final void clearREG() {
+        SP = 0xff;
 
-		// regs
-		AC = X = Y = 0;
-		// flags
-		B = C = V = N = Z = 0;
-		I = 4;
-	}
+        // regs
+        AC = X = Y = 0;
+        // flags
+        B = C = V = N = Z = 0;
+        I = 4;
+    }
 
-	// reset processor
-	public static final void reset() {
-		final int lo = Memory.fetch(0xFFFC);
-		final int hi = Memory.fetch(0xFFFD);
+    // reset processor
+    public static final void reset() {
+        clearREG();
+        final int lo = Memory.fetch(0xFFFC);
+        final int hi = Memory.fetch(0xFFFD);
+        PC = word(lo, hi);
+    }
 
-		PC = word(lo, hi);
-		clearREG();
-	}
+    // pack all flags into single byte
+    private static final int packFlags() {
+        return N | V | 48 | D | I | Z | C;
+    }
 
-	// pack all flags into single byte
-	private static final int packFlags() {
-		return N | V | 48 | D | I | Z | C;
-	}
+    // unpack all flags
+    private static final void unpackFlags(final int flags) {
+        N = flags & 128;
+        V = flags & 64;
+        D = flags & 8;
+        I = flags & 4;
+        Z = flags & 2;
+        C = flags & 1;
+    }
 
-	// unpack all flags
-	private static final void unpackFlags(final int flags) {
-		N = flags & 128;
-		V = flags & 64;
-		D = flags & 8;
-		I = flags & 4;
-		Z = flags & 2;
-		C = flags & 1;
-	}
+    // initialize interrupt
+    public static final int IRQ() {
+        int hi = PC >>> 8;
+        int lo = PC & 0xff;
 
-	// initialize interrupt
-	public static final int IRQ() {
-		int hi = PC >>> 8;
-		int lo = PC & 0xff;
+        push(hi);
+        push(lo);
 
-		push(hi);
-		push(lo);
+        push(N | V | D | I | Z | C);
+        I = 4;
 
-		push(N | V | D | I | Z | C);
-		I = 4;
+        lo = Memory.fetch(0xFFFE);
+        hi = Memory.fetch(0xFFFF);
 
-		lo = Memory.fetch(0xFFFE);
-		hi = Memory.fetch(0xFFFF);
+        PC = word(lo, hi);
 
-		PC = word(lo, hi);
+        return 7;
+    }
 
-		return 7;
-	}
+    // initialize non maskable interrupt
+    public static final int NMI() {
+        int hi = PC >>> 8;
+        int lo = PC & 0xff;
 
-	// initialize non maskable interrupt
-	public static final int NMI() {
-		int hi = PC >>> 8;
-		int lo = PC & 0xff;
+        push(hi);
+        push(lo);
+        push(packFlags());
+        I = 4;
 
-		push(hi);
-		push(lo);
-		push(packFlags());
-		I = 4;
+        lo = Memory.fetch(0xFFFA);
+        hi = Memory.fetch(0xFFFB);
+        PC = word(lo, hi);
 
-		lo = Memory.fetch(0xFFFA);
-		hi = Memory.fetch(0xFFFB);
-		PC = word(lo, hi);
+        return 7;
+    }
 
-		return 7;
-	}
+    // subtraction with carry
+    protected static final int subC(int A, int B) {
+        // compliment 2 add -B
+        A &= 0xff;
+        B = ((B & 0xff) ^ 0xff) + 1;
 
-	// subtraction with carry
-	protected static final int subC(int A, int B) {
-		// compliment 2 add -B
-		A &= 0xff;
-		B = ((B & 0xff) ^ 0b11111111) + 1;
+        int ALU = A + B - (C ^ 0b1);
+        C = (ALU & 0x100) >> 8;
+        ALU &= 0xff;
 
-		int ALU = A + B - (C ^ 0b1);
-		C = (ALU & 0x100) >> 8;
-		ALU &= 0xff;
+        setNZ(ALU);
+        return ALU;
+    }
 
-		setNZ(ALU);
-		return ALU;
-	}
+    // subtraction without carry
+    protected static final int sub(int A, int B) {
+        // compliment 2 add -B
+        A &= 0xff;
+        B = ((B & 0xff) ^ 0xff) + 1;
 
-	// subtraction without carry
-	protected static final int sub(int A, int B) {
-		// compliment 2 add -B
-		A &= 0xff;
-		B = ((B & 0xff) ^ 0b11111111) + 1;
+        int ALU = A + B;
+        C = (ALU & 0x100) >> 8;
+        ALU &= 0xff;
 
-		int ALU = A + B;
-		C = (ALU & 0x100) >> 8;
-		ALU &= 0xff;
+        setNZ(ALU);
+        return ALU;
+    }
 
-		setNZ(ALU);
-		return ALU;
-	}
+    // addition with carry
+    protected static final int addC(int A, int B) {
+        A &= 0xff;
+        B &= 0xff;
 
-	// addition with carry
-	protected static final int addC(int A, int B) {
-		A &= 0xff;
-		B &= 0xff;
+        int ALU = A + B + C;
 
-		int ALU = A + B + C;
+        C = (ALU & 0x100) >> 8;
+        ALU &= 0xff;
 
-		C = (ALU & 0x100) >> 8;
-		ALU &= 0xff;
+        setNZ(ALU);
+        return ALU;
+    }
 
-		setNZ(ALU);
-		return ALU;
-	}
+    public static final int executeNext() {
+        final int opcode = Memory.fetch(PC);
+        incPC();
 
-	public static final int executeNext() {
-		final int opcode = Memory.fetch(PC);
-		incPC();
-		
-		final OPCODE op = opcodes[opcode];
-		return op.execute();
-	}
+        final OPCODE op = opcodes[opcode];
+        return op.execute();
+    }
 }

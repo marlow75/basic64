@@ -48,7 +48,7 @@ public class FastPALcodec {
 		
 		luminance = new float[FRAME_SIZE];
 		chrominance = new float[FRAME_SIZE];
-
+				
 		dotClock = (SCANLINE_TIME - (FRONT_PORCH + LINE_SYNC + BACK_PORCH)) / 720f;
 		prepareSinCosTables();
 	}
@@ -87,7 +87,7 @@ public class FastPALcodec {
 				index++;
 			}
 			
-			t += FRONT_PORCH;
+			t += SCANLINE_TIME;
 		}
 	}
 
@@ -100,14 +100,15 @@ public class FastPALcodec {
 			
 			for (int x0 = 0; x0 < 720; x0++) {
 				final int p = a + (int) (x0 * dotX);
-				final int d = src[p];
 
 				final float r;
 				final float g;
 				final float b;
 
 				if (p < len) {
+					final int d = src[p];
 					r = ((d >> 16) & 0xff) / 255f;
+					
 					g = ((d >> 8) & 0xff) / 255f;
 					b = (d & 0xff) / 255f;
 				} else {
@@ -126,6 +127,7 @@ public class FastPALcodec {
 				// get chrominance component
 				// even = PAL switching
 				chrominance[index] = u * sin[index] + v * cos[index];
+				
 				index++;
 			}
 		}
@@ -135,14 +137,15 @@ public class FastPALcodec {
 
 			for (int x0 = 0; x0 < 720; x0++) {
 				final int p = a + (int) (x0 * dotX);
-				final int d = src[p];
 
 				final float r;
 				final float g;
 				final float b;
 
 				if (p < len) {
+					final int d = src[p];
 					r = ((d >> 16) & 0xff) / 255f;
+					
 					g = ((d >> 8) & 0xff) / 255f;
 					b = (d & 0xff) / 255f;
 				} else {
@@ -161,7 +164,7 @@ public class FastPALcodec {
 				// get chrominance component
 				// even = PAL switching
 				chrominance[index] = u * sin[index] + -v * cos[index];
-
+				
 				index++;
 			}
 		}
@@ -169,17 +172,17 @@ public class FastPALcodec {
 
 	public static void decodeYC() {
 		int index = 0;
-		float oldLuminance = 1f;
 
 		for (int y0 = 0; y0 < 576; y0 += 2) {
 			final int a1 = y0 * 720;
 
+			float oldLuminance = 1f;
 			for (int x0 = 0; x0 < 720; x0++) {
 				final float c = chrominance[index];
 
 				final float v = c * cos[index];
 				final float u = c * sin[index];
-
+				
 				final float y = (luminance[index] + oldLuminance) / 2;
 				oldLuminance = y;
 
@@ -199,13 +202,14 @@ public class FastPALcodec {
 
 		for (int y0 = 1; y0 < 576; y0 += 2) {
 			final int a = y0 * 720;
-
+			float oldLuminance = 1f;
+			
 			for (int x0 = 0; x0 < 720; x0++) {
 				final float c = chrominance[index];
 
 				final float v = -c * cos[index];
 				final float u = c * sin[index];
-
+				
 				final float y = (luminance[index] + oldLuminance) / 2;
 				oldLuminance = y;
 				
