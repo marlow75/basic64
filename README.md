@@ -7,7 +7,7 @@ Features:
 - runs PRG files
 - emulated keyboard matrix (not all keys)
 - CIA timers (jiffies)
-- SID emulation, 3 fave forms, ADSR
+- SID emulation, 3 waveforms, ADSR
 - VIC graphics and text modes, sprites and IRQ (bad lines)
 - C64 memory layout & banking
 - Microsoft BASIC interpreter
